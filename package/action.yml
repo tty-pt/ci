@@ -47,6 +47,7 @@ runs:
       shell: bash
 
     - name: Package source tarball
+      if: runner.os == 'Linux'
       run: |
         mkdir -p dist
         tar czf dist/${{ inputs.name }}-${{ env.VERSION }}-src.tar.gz \

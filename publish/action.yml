@@ -1,0 +1,74 @@
+name: 'publish'
+description: 'Aggregate .deb packages and publish to OpenBSD web root as an APT repo'
+author: 'tty-pt'
+
+inputs:
+  source:
+    description: 'Path or glob of .deb files to publish (e.g. dist/*.deb)'
+    required: true
+  host:
+    description: 'Target host'
+    required: true
+  user:
+    description: 'Target username'
+    required: true
+  ssh_key:
+    description: 'Private SSH key'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ inputs.ssh_key }}" > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+        ssh-keyscan -H ${{ inputs.host }} >> ~/.ssh/known_hosts
+      shell: bash
+
+    - name: Fetch current repo from server
+      run: |
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519" \
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apt/ repo/ || true
+      shell: bash
+
+    - name: Install dpkg-dev
+      run: sudo apt-get update && sudo apt-get install -y dpkg-dev
+      shell: bash
+
+    - name: Merge new packages
+      run: |
+        mkdir -p repo/pool/main
+        for deb in ${{ inputs.source }}; do
+          pkg=$(dpkg-deb -f "$deb" Package)
+          ver=$(dpkg-deb -f "$deb" Version)
+          arch=$(dpkg-deb -f "$deb" Architecture)
+          firstletter=$(echo "$pkg" | cut -c1 | tr '[:upper:]' '[:lower:]')
+          target="repo/pool/main/$firstletter/$pkg"
+          mkdir -p "$target"
+          cp "$deb" "$target/${pkg}_${ver}_${arch}.deb"
+        done
+      shell: bash
+
+    - name: Rebuild index
+      run: |
+        mkdir -p repo/dists/stable/main/binary-amd64
+        dpkg-scanpackages repo/pool > repo/dists/stable/main/binary-amd64/Packages
+        gzip -9 < repo/dists/stable/main/binary-amd64/Packages > repo/dists/stable/main/binary-amd64/Packages.gz
+        cat > repo/dists/stable/Release <<EOF
+        Origin: tty.pt
+        Label: tty.pt
+        Suite: stable
+        Codename: stable
+        Architectures: amd64
+        Components: main
+        Description: tty.pt aggregated packages
+        EOF
+      shell: bash
+
+    - name: Push repo back to server
+      run: |
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519" repo/ \
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apt/
+      shell: bash
