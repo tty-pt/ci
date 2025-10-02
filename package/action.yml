@@ -1,4 +1,4 @@
-name: 'make-packager'
+name: 'package'
 description: 'Compile C projects with include.mk and package for Linux (deb,rpm), Windows (zip), OpenBSD (tar.gz) and source tarball'
 author: 'tty-pt'
 
@@ -74,9 +74,38 @@ runs:
             DEPENDS_OPTS="$DEPENDS_OPTS --depends $dep"
           done
         fi
-        fpm -s dir -t deb -n ${{ inputs.name }} -v ${{ env.VERSION }} -C stage $DEPENDS_OPTS
-        fpm -s dir -t rpm -n ${{ inputs.name }} -v ${{ env.VERSION }} -C stage $DEPENDS_OPTS
+        
+        LICENSE="MIT"
+        VENDOR="${{ github.repository_owner }}"
+        MAINTAINER="${{ github.repository_owner }} <noreply@github.com>"
+        HOMEPAGE="https://github.com/${{ github.repository }}"
+        DESC="${{ github.event.repository.description }}"
+        if [ -z "$DESC" ]; then
+          DESC="C library ${{ inputs.name }}"
+        fi
+
+        fpm -s dir -t deb -n ${{ inputs.name }} -v ${{ env.VERSION }} \
+            -C stage \
+            --license "$LICENSE" \
+            --vendor "$VENDOR" \
+            --maintainer "$MAINTAINER" \
+            --url "$HOMEPAGE" \
+            --description "$DESC" \
+            --category "devel" \
+            $DEPENDS_OPTS
+
+        fpm -s dir -t rpm -n ${{ inputs.name }} -v ${{ env.VERSION }} \
+            -C stage \
+            --license "$LICENSE" \
+            --vendor "$VENDOR" \
+            --maintainer "$MAINTAINER" \
+            --url "$HOMEPAGE" \
+            --description "$DESC" \
+            --category "devel" \
+            $DEPENDS_OPTS
+
         mv *.deb *.rpm dist/
+
       shell: bash
 
     - name: Package Windows
