@@ -1,0 +1,76 @@
+name: all-in-one
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: "Package name"
+        required: true
+        type: string
+      deps:
+        description: "Comma-separated package deps"
+        required: false
+        type: string
+      targets:
+        description: "OS build targets (ubuntu-latest, macos-latest, windows-latest)"
+        required: false
+        default: "ubuntu-latest"
+        type: string
+    secrets:
+      HOST:
+        required: true
+      USER:
+        required: true
+      SSH_KEY:
+        required: true
+      GPG_PRIVATE_KEY:
+        required: false
+      GPG_PASSPHRASE:
+        required: false
+      GPG_KEYID:
+        required: false
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: ${{ fromJSON(inputs.targets) }}
+    steps:
+      - uses: tty-pt/ci/package@main
+        with:
+          name: ${{ inputs.name }}
+          deps: ${{ inputs.deps }}
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      # Download all build artifacts (Linux, macOS, Windows)
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - uses: tty-pt/ci/release@main
+        with:
+          files: dist/**/*
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      # Only need Linux debs for apt repo
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.name }}-Linux
+          path: dist
+
+      - uses: tty-pt/ci/publish@main
+        with:
+          source: dist/*.deb
+          host: ${{ secrets.HOST }}
+          user: ${{ secrets.USER }}
+          ssh_key: ${{ secrets.SSH_KEY }}
+          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+          gpg_keyid: ${{ secrets.GPG_KEYID }}

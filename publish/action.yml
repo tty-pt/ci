@@ -1,20 +1,30 @@
 name: 'publish'
-description: 'Aggregate .deb packages and publish to OpenBSD web root as an APT repo'
+description: 'Publish .deb packages to an APT repo served from OpenBSD'
 author: 'tty-pt'
 
 inputs:
   source:
-    description: 'Path or glob of .deb files to publish (e.g. dist/*.deb)'
+    description: 'Glob for .deb files to publish (e.g. dist/*.deb)'
     required: true
   host:
-    description: 'Target host'
+    description: 'Server hostname'
     required: true
   user:
-    description: 'Target username'
+    description: 'Server user'
     required: true
   ssh_key:
     description: 'Private SSH key'
     required: true
+  gpg_key:
+    description: 'Private GPG key (ASCII-armored)'
+    required: false
+    default: ""
+  gpg_keyid:
+    description: 'Key ID or fingerprint to use when signing'
+    required: false
+  gpg_pass:
+    description: 'Passphrase for the GPG key (if any)'
+    required: false
 
 runs:
   using: 'composite'
@@ -27,14 +37,18 @@ runs:
         ssh-keyscan -H ${{ inputs.host }} >> ~/.ssh/known_hosts
       shell: bash
 
-    - name: Fetch current repo from server
+    - name: Install apt-ftparchive
       run: |
-        rsync -avz -e "ssh -i ~/.ssh/id_ed25519" \
-          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apt/ repo/ || true
+        sudo apt-get update
+        sudo rm -f /var/lib/man-db/auto-update
+        sudo apt-get install -y apt-utils dpkg-dev rsync gnupg
       shell: bash
 
-    - name: Install dpkg-dev
-      run: sudo apt-get update && sudo apt-get install -y dpkg-dev
+    - name: Fetch current repo from server
+      run: |
+        mkdir -p repo
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apt/ repo/ || true
       shell: bash
 
     - name: Merge new packages
@@ -51,24 +65,80 @@ runs:
         done
       shell: bash
 
-    - name: Rebuild index
+    - name: Generate indexes
       run: |
+        ORIGIN="${GITHUB_REPOSITORY_OWNER}"
         mkdir -p repo/dists/stable/main/binary-amd64
-        dpkg-scanpackages repo/pool > repo/dists/stable/main/binary-amd64/Packages
-        gzip -9 < repo/dists/stable/main/binary-amd64/Packages > repo/dists/stable/main/binary-amd64/Packages.gz
-        cat > repo/dists/stable/Release <<EOF
-        Origin: tty.pt
-        Label: tty.pt
-        Suite: stable
-        Codename: stable
-        Architectures: amd64
-        Components: main
-        Description: tty.pt aggregated packages
+
+        cat > apt-ftparchive.conf <<EOF
+        Dir {
+          ArchiveDir "repo";
+          CacheDir   "repo/.cache";
+        }
+        Default {
+          Packages::Compress ". gzip bzip2 xz";
+          Sources::Compress  ". gzip bzip2 xz";
+          Contents::Compress ". gzip bzip2 xz";
+        }
+        TreeDefault {
+          Directory  "pool/main";
+          Packages   "dists/stable/main/binary-amd64/Packages";
+          Contents   "dists/stable/main/Contents-amd64";
+        }
+        BinDirectory "pool/main" {
+          Packages "dists/stable/main/binary-amd64/Packages";
+          Contents "dists/stable/main/Contents-amd64";
+          Arch amd64;
+          Section main;
+        }
+        APT::FTPArchive::Release {
+          Origin "$ORIGIN";
+          Label "$ORIGIN";
+          Suite "stable";
+          Codename "stable";
+          Components "main";
+          Architectures "amd64";
+          Acquire-By-Hash "yes";
+        }
         EOF
+
+        apt-ftparchive generate apt-ftparchive.conf
+        apt-ftparchive -c apt-ftparchive.conf release repo/dists/stable > repo/dists/stable/Release
+      shell: bash
+
+    - name: Import GPG key
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        echo "${{ inputs.gpg_key }}" | gpg --batch --import
+        echo "${{ inputs.gpg_keyid }}"
+        gpg --list-secret-keys --keyid-format=long
+      shell: bash
+
+    - name: Sign Release
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        set -euo pipefail
+        key="${{ inputs.gpg_keyid }}"
+
+        # Sanity: make sure Release exists and isn’t empty
+        test -s repo/dists/stable/Release
+
+        # Sign inline
+        gpg --batch --yes --local-user "$key" \
+            --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
+            --digest-algo SHA256 \
+            --clearsign -o repo/dists/stable/InRelease repo/dists/stable/Release
+
+        # Detached signature
+        gpg --batch --yes --local-user "$key" \
+            --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
+            --digest-algo SHA256 \
+            -abs -o repo/dists/stable/Release.gpg repo/dists/stable/Release
+
       shell: bash
 
     - name: Push repo back to server
       run: |
-        rsync -avz -e "ssh -i ~/.ssh/id_ed25519" repo/ \
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" repo/ \
           ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apt/
       shell: bash
