@@ -37,7 +37,7 @@ runs:
         fi
       shell: bash
 
-    - name: Install build deps (Linux)
+    - name: Install packaging tools
       if: runner.os == 'Linux'
       run: |
         echo "deb [trusted=yes] http://tty.pt/apt stable main" | sudo tee /etc/apt/sources.list.d/ttypt.list
@@ -46,6 +46,22 @@ runs:
         if [ -n "${{ inputs.deps }}" ]; then
           sudo apt-get install -y $(echo "${{ inputs.deps }}" | tr ',' ' ')
         fi
+
+        sudo apt-get install -y ruby ruby-dev build-essential
+
+        # pacman support
+        sudo apt-get install -y libarchive-tools
+
+        # Install other packaging tools
+        sudo apt-get install -y rpm alien
+
+        # Install fpm gem
+        sudo gem install --no-document fpm
+
+        echo "Packaging tools installed:"
+        which fpm
+        bsdtar --version || echo "bsdtar not available (non-fatal)"
+        rpm --version || echo "rpm not available (non-fatal)"
       shell: bash
 
     - name: Build
@@ -75,7 +91,7 @@ runs:
         sudo gem install --no-document fpm
       shell: bash
 
-    - name: Package Linux (DEB, RPM, APK)
+    - name: Package Linux (DEB, RPM, APK, PACMAN)
       if: runner.os == 'Linux'
       run: |
         mkdir -p dist
@@ -85,7 +101,7 @@ runs:
             DEPENDS_OPTS="$DEPENDS_OPTS --depends $dep"
           done
         fi
-        
+
         LICENSE="MIT"
         VENDOR="${{ github.repository_owner }}"
         MAINTAINER="${{ github.repository_owner }} <noreply@github.com>"
@@ -127,7 +143,7 @@ runs:
             --architecture "$ARCH" \
             $DEPENDS_OPTS
 
-        # Build RPM package  
+        # Build RPM package
         fpm -s dir -t rpm -n ${{ inputs.name }} -v ${{ env.VERSION }} \
             -C stage \
             --license "$LICENSE" \
@@ -139,7 +155,7 @@ runs:
             --architecture "$ARCH" \
             $DEPENDS_OPTS
 
-        # Build APK package - explicitly set architecture
+        # Build APK package
         fpm -s dir -t apk -n ${{ inputs.name }} -v ${{ env.VERSION }} \
             -C stage \
             --license "$LICENSE" \
@@ -151,9 +167,21 @@ runs:
             --architecture "$ARCH" \
             $DEPENDS_OPTS
 
+        # Build Pacman package
+        fpm -s dir -t pacman -n ${{ inputs.name }} -v ${{ env.VERSION }} \
+            -C stage \
+            --license "$LICENSE" \
+            --vendor "$VENDOR" \
+            --maintainer "$MAINTAINER" \
+            --url "$HOMEPAGE" \
+            --description "$DESC" \
+            --category "devel" \
+            --architecture "$ARCH" \
+            $DEPENDS_OPTS
+
         # Move all packages to dist directory
-        mv *.deb *.rpm *.apk dist/ 2>/dev/null || true
-        
+        mv *.deb *.rpm *.apk *.pkg.tar.* dist/ 2>/dev/null || true
+
         echo "Packages built:"
         ls -la dist/
         echo "Package architectures:"

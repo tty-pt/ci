@@ -19,7 +19,7 @@ on:
       publish_to:
         description: "Package managers to publish to (apt,apk or both)"
         required: false
-        default: "apt,apk"
+        default: "apt,apk,pacman"
         type: string
     secrets:
       HOST:
@@ -91,3 +91,14 @@ jobs:
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
           gpg_keyid: ${{ secrets.GPG_KEYID }}
+
+      - uses: tty-pt/ci/publish-pacman@main
+        with:
+          source: dist/*.pkg.tar.*
+          host: ${{ secrets.HOST }}
+          user: ${{ secrets.USER }}
+          ssh_key: ${{ secrets.SSH_KEY }}
+          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+          gpg_keyid: ${{ secrets.GPG_KEYID }}
+          repo_name: ${{ github.repository_owner }}

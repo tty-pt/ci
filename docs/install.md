@@ -44,3 +44,22 @@ Then it's just:
 ```sh
 apk add <package-name>
 ```
+
+### pacman (Arch Linux, Etc)
+At least once in your life you need to:
+```sh
+# Add the repository to pacman.conf
+echo -e "\n[ttypt]\nSigLevel = Optional TrustAll\nServer = https://tty.pt/pacman/\$arch" | sudo tee -a /etc/pacman.conf
+
+# Import the GPG key (optional, for verification)
+sudo pacman-key --add <(wget -qO- https://tty.pt/pacman/key.pub)
+sudo pacman-key --lsign-key YOUR_KEY_ID
+
+# Update package database
+sudo pacman -Sy
+```
+
+Then it's just:
+```sh
+sudo pacman -S ttypt/<package-name>
+```
