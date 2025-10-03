@@ -98,9 +98,9 @@ runs:
       if: runner.os == 'Linux'
       run: |
         # Create separate directories for each package type
-        mkdir -p dist/deb dist/apk dist/pacman
+        mkdir -p dist-linux/deb dist-linux/apk dist-linux/pacman dist-linux/rpm
         
-        # Common FPM options (same as before)
+        # Common FPM options
         DEPENDS_OPTS=""
         if [ -n "${{ inputs.deps }}" ]; then
           for dep in $(echo "${{ inputs.deps }}" | tr ',' ' '); do
@@ -144,7 +144,7 @@ runs:
               --category "devel" \
               --architecture "$ARCH" \
               $DEPENDS_OPTS
-          mv *.deb dist/deb/ 2>/dev/null || true
+          mv *.deb dist-linux/deb/ 2>/dev/null || true
         fi
 
         # Build APK to apk/ directory
@@ -159,7 +159,7 @@ runs:
               --category "devel" \
               --architecture "$ARCH" \
               $DEPENDS_OPTS
-          mv *.apk dist/apk/ 2>/dev/null || true
+          mv *.apk dist-linux/apk/ 2>/dev/null || true
         fi
 
         # Build Pacman to pacman/ directory
@@ -174,10 +174,10 @@ runs:
               --category "devel" \
               --architecture "$ARCH" \
               $DEPENDS_OPTS || echo "Pacman package build failed"
-          mv *.pkg.tar.* dist/pacman/ 2>/dev/null || true
+          mv *.pkg.tar.* dist-linux/pacman/ 2>/dev/null || true
         fi
 
-        # Build RPM to rpm/ directory (if you want it)
+        # Build RPM to rpm/ directory
         if [[ " ${{ inputs.publish_to }} " == *"rpm"* ]]; then
           fpm -s dir -t rpm -n ${{ inputs.name }} -v ${{ env.VERSION }} \
               -C stage \
@@ -189,40 +189,84 @@ runs:
               --category "devel" \
               --architecture "$ARCH" \
               $DEPENDS_OPTS
-
-          mv *.rpm dist/rpm/ 2>/dev/null || true
+          mv *.rpm dist-linux/rpm/ 2>/dev/null || true
         fi
         
-        echo "Package distribution:"
-        find dist -type f | sort
+        echo "Linux package distribution:"
+        find dist-linux -type f | sort
       shell: bash
 
     - name: Package macOS
       if: runner.os == 'macOS'
       run: |
-        mkdir -p dist
+        mkdir -p dist-macos
         ARCH=$(uname -m)
         
-        # 1. Create honest architecture-specific tarball
-        tar czf "dist/${{ inputs.name }}-${{ env.VERSION }}-macos-$ARCH.tar.gz" -C stage .
+        # Create architecture-specific tarball
+        tar czf "dist-macos/${{ inputs.name }}-${{ env.VERSION }}-macos-$ARCH.tar.gz" -C stage .
         
-        # 2. Optional: Simple component package
+        # Optional: Simple component package
         pkgbuild --root stage \
                  --identifier "com.${{ github.repository_owner }}.${{ inputs.name }}" \
                  --version "${{ env.VERSION }}" \
                  --install-location "${{ inputs.prefix }}" \
-                 "dist/${{ inputs.name }}-${{ env.VERSION }}-$ARCH.pkg"
+                 "dist-macos/${{ inputs.name }}-${{ env.VERSION }}-$ARCH.pkg"
         
         echo "macOS packages created:"
-        ls -la dist/
+        ls -la dist-macos/
       shell: bash
 
     - name: Package Windows
       if: runner.os == 'Windows'
-      shell: pwsh
       run: |
-        mkdir dist
-        Compress-Archive -Path stage\* -DestinationPath dist\${{ inputs.name }}-${{ env.VERSION }}-win.zip
+        mkdir dist-windows
+        # Add architecture detection for Windows
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
+        Compress-Archive -Path stage\* -DestinationPath "dist-windows\${{ inputs.name }}-${{ env.VERSION }}-win-$arch.zip"
+        
+        # Create source tarball for Windows build
+        tar czf "dist-windows/${{ inputs.name }}-${{ env.VERSION }}-src.tar.gz" \
+          --exclude=.git \
+          --exclude=dist-* \
+          --exclude=stage \
+          .
+      shell: pwsh
+
+    - name: Capture build info
+      run: |
+        echo "COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+        echo "COMMIT_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+        echo "BUILD_DATE=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV
+
+        # Create build info file for this platform
+        cat > BUILD_INFO << EOF
+        Package: ${{ inputs.name }}
+        Version: ${{ env.VERSION }}
+        Commit: $(git rev-parse HEAD)
+        CommitShort: $(git rev-parse --short HEAD)
+        BuildDate: $(date -u +%Y-%m-%d)
+        BuildOS: ${{ runner.os }}
+        Architecture: $(uname -m)
+        EOF
+      shell: bash
+
+    - name: Generate checksums for each platform
+      run: |
+        # Generate checksums for the appropriate dist directory
+        if [ "${{ runner.os }}" = "Linux" ]; then
+          cd dist-linux
+        elif [ "${{ runner.os }}" = "macOS" ]; then
+          cd dist-macos
+        elif [ "${{ runner.os }}" = "Windows" ]; then
+          cd dist-windows
+        fi
+        
+        # Include BUILD_INFO in checksums
+        cp ../BUILD_INFO .
+        find . -type f -name "*" | xargs shasum -a 256 > SHA256SUMS
+        echo "Generated checksums:"
+        cat SHA256SUMS
+      shell: bash
 
     - name: Capture build info
       run: |
@@ -241,18 +285,11 @@ runs:
         EOF
       shell: bash
 
-    - name: Generate checksums
-      run: |
-        cd dist
-        # Include BUILD_INFO in checksums
-        cp ../BUILD_INFO .
-        find . -type f -name "*" | xargs shasum -a 256 > SHA256SUMS
-        echo "Generated checksums:"
-        cat SHA256SUMS
-      shell: bash
-
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.name }}-${{ runner.os }}
-        path: dist/*
+        path: |
+          ${{ runner.os == 'Linux' && 'dist-linux/*' || '' }}
+          ${{ runner.os == 'macOS' && 'dist-macos/*' || '' }}
+          ${{ runner.os == 'Windows' && 'dist-windows/*' || '' }}

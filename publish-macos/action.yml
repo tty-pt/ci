@@ -52,17 +52,17 @@ runs:
 
     - name: Fetch current macOS dist from server
       run: |
-        mkdir -p repo
+        mkdir -p repo/macos
         rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/macos/ repo/ || echo "Initial sync completed"
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/macos/ repo/macos || echo "Initial sync completed"
       shell: bash
 
     - name: Create versioned directory structure
       run: |
-        mkdir -p repo/versions/$VERSION
-        mkdir -p repo/universal
-        mkdir -p repo/arm64
-        mkdir -p repo/x86_64
+        mkdir -p repo/macos/versions/$VERSION
+        mkdir -p repo/macos/universal
+        mkdir -p repo/macos/arm64
+        mkdir -p repo/macos/x86_64
 
         MACOS_COUNT=0
         for artifact in ${{ inputs.source }}; do
@@ -72,18 +72,18 @@ runs:
             # Only process macOS packages
             if [[ "$filename" == *"macos"* ]]; then
               echo "Copying macOS package: $filename"
-              cp "$artifact" repo/versions/$VERSION/
+              cp "$artifact" repo/macos/versions/$VERSION/
               MACOS_COUNT=$((MACOS_COUNT+1))
 
               # Copy to architecture-specific directories
               if [[ "$filename" == *"universal"* ]]; then
-                cp "$artifact" repo/universal/
+                cp "$artifact" repo/macos/universal/
               elif [[ "$filename" == *"arm64"* ]]; then
-                cp "$artifact" repo/arm64/
+                cp "$artifact" repo/macos/arm64/
               elif [[ "$filename" == *"x86_64"* ]]; then
-                cp "$artifact" repo/x86_64/
+                cp "$artifact" repo/macos/x86_64/
               elif [[ "$filename" == *".pkg"* ]]; then
-                cp "$artifact" repo/universal/
+                cp "$artifact" repo/macos/universal/
               fi
             fi
           fi
@@ -91,14 +91,14 @@ runs:
 
         if [ "$MACOS_COUNT" -eq 0 ]; then
           echo "No macOS packages found to publish"
-          rm -rf repo/versions/$VERSION
+          rm -rf repo/macos/versions/$VERSION
           exit 0
         fi
 
         echo "Copied $MACOS_COUNT macOS packages"
 
         # Create checksums for macOS packages only
-        cd repo/versions/$VERSION
+        cd repo/macos/versions/$VERSION
         shasum -a 256 * > SHA256SUMS
 
         # Update latest symlink
@@ -110,7 +110,7 @@ runs:
     - name: Sign checksums with GPG
       if: ${{ inputs.gpg_key != '' }}
       run: |
-        cd repo/versions/$VERSION
+        cd repo/macos/versions/$VERSION
         if [ -f "SHA256SUMS" ] && [ -s "SHA256SUMS" ]; then
           gpg --batch --yes --detach-sign --armor -u "${{ inputs.gpg_keyid }}" SHA256SUMS
         fi
@@ -119,7 +119,7 @@ runs:
     - name: Distribute GPG public key
       if: ${{ inputs.gpg_key != '' }}
       run: |
-        gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/key.pub
+        gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/macos/key.pub
       shell: bash
 
     - name: Push to server
@@ -129,7 +129,7 @@ runs:
           mkdir -p /var/www/htdocs/macos/{versions,universal,arm64,x86_64}
         "
         
-        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" repo/ \
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" repo/macos/ \
           ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/macos/
         
         echo "macOS distribution published: https://tty.pt/macos/"
