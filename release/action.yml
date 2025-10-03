@@ -4,7 +4,7 @@ author: 'tty-pt'
 
 inputs:
   files:
-    description: 'Glob of files to upload (e.g. dist/**)'
+    description: 'Glob of files to upload (e.g. release/**)'
     required: true
   include_checksums:
     description: 'Include checksums in release'
@@ -48,7 +48,7 @@ runs:
         fi
 
         # Add verification section if checksums are included
-        if [ -f dist/SHA256SUMS ]; then
+        if [ -f release/SHA256SUMS ]; then
           echo "" >> RELEASE_NOTES.md
           echo "### Verification" >> RELEASE_NOTES.md
           echo "Verify package integrity with:" >> RELEASE_NOTES.md
@@ -58,36 +58,26 @@ runs:
         fi
       shell: bash
 
-    - name: Organize release assets
+    - name: Verify release files
       run: |
-        # Create organized directory structure for release
-        mkdir -p release-assets
-
-        # Copy all artifacts to organized structure
-        cp -r dist/* release-assets/ 2>/dev/null || true
-
-        # Ensure critical files are present
-        if [ ! -f release-assets/SHA256SUMS ] && [ -f dist/SHA256SUMS ]; then
-          cp dist/SHA256SUMS release-assets/
-        fi
-
-        if [ ! -f release-assets/BUILD_INFO ] && [ -f dist/BUILD_INFO ]; then
-          cp dist/BUILD_INFO release-assets/
-        fi
-
-        echo "Release assets organized:"
-        find release-assets -type f | sort
+        echo "=== Release directory contents ==="
+        find release -type f | sort
+        
+        echo ""
+        echo "=== Files that will be uploaded ==="
+        for file in ${{ inputs.files }}; do
+          if [ -f "$file" ]; then
+            echo "✓ $file"
+          else
+            echo "✗ $file (not found)"
+          fi
+        done
       shell: bash
 
     - name: Publish comprehensive release
       uses: softprops/action-gh-release@v1
       with:
-        files: |
-          release-assets/packages/*
-          release-assets/source/*
-          release-assets/docs/*
-          release-assets/SHA256SUMS
-          release-assets/BUILD_INFO
+        files: ${{ inputs.files }}
         body_path: RELEASE_NOTES.md
         draft: false
         prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') || contains(github.ref, 'rc') }}

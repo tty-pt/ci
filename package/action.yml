@@ -1,5 +1,5 @@
 name: 'package'
-description: 'Compile C projects with include.mk and package for multiple platforms with comprehensive release assets'
+description: 'Compile C projects with include.mk and package for multiple platforms'
 author: 'tty-pt'
 
 inputs:
@@ -15,59 +15,26 @@ inputs:
   prefix:
     description: 'Install prefix (default /usr/local)'
     default: '/usr/local'
-  include_checksums:
-    description: 'Generate checksums for all artifacts'
-    required: false
-    default: 'true'
-  include_source:
-    description: 'Include source tarball in release'
-    required: false
-    default: 'true'
 
 runs:
   using: 'composite'
   steps:
     - name: Checkout project
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
 
     - name: Fetch include.mk from tty-pt/mk
       run: |
         git clone --branch main https://github.com/tty-pt/mk ../mk
       shell: bash
 
-    - name: Resolve version and metadata
+    - name: Resolve version
       id: vars
       run: |
         if [ -n "${{ inputs.version }}" ]; then
-          VERSION="${{ inputs.version }}"
+          echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
         else
-          # Try to get version from git tag, fallback to commit
-          if [ -n "${GITHUB_REF#refs/tags/}" ] && [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
-          else
-            VERSION="git-$(git rev-parse --short HEAD)"
-          fi
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
         fi
-
-        # Clean version (remove 'v' prefix)
-        VERSION=${VERSION#v}
-
-        # Get git commit for reproducibility
-        COMMIT=$(git rev-parse HEAD)
-        COMMIT_SHORT=$(git rev-parse --short HEAD)
-        BRANCH=$(git rev-parse --abbrev-ref HEAD)
-
-        echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "COMMIT=$COMMIT" >> $GITHUB_ENV
-        echo "COMMIT_SHORT=$COMMIT_SHORT" >> $GITHUB_ENV
-        echo "BRANCH=$BRANCH" >> $GITHUB_ENV
-
-        # Export for other steps
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "commit=$COMMIT" >> $GITHUB_OUTPUT
-        echo "commit_short=$COMMIT_SHORT" >> $GITHUB_OUTPUT
       shell: bash
 
     - name: Install build deps (Linux)
@@ -81,64 +48,51 @@ runs:
         fi
       shell: bash
 
-    - name: Build
+    - name: Install build deps (macOS)
+      if: runner.os == 'macOS'
       run: |
-        echo "Building ${{ inputs.name }} version ${{ env.VERSION }}"
-        echo "Commit: ${{ env.COMMIT_SHORT }} (${{ env.COMMIT }})"
-        echo "Branch: ${{ env.BRANCH }}"
-        make
+        # Install common build tools on macOS
+        brew update
+        if [ -n "${{ inputs.deps }}" ]; then
+          for dep in $(echo "${{ inputs.deps }}" | tr ',' ' '); do
+            brew install "$dep" || echo "Dependency $dep not found in Homebrew"
+          done
+        fi
+      shell: bash
+
+    - name: Build
+      run: make
       shell: bash
 
     - name: Install to staging
       run: |
         make DESTDIR=$PWD/stage PREFIX=${{ inputs.prefix }} install
-
-        # Create version file for reproducibility
-        mkdir -p stage/etc/${{ inputs.name }}
-        cat > stage/etc/${{ inputs.name }}/build-info << EOF
-        Package: ${{ inputs.name }}
-        Version: ${{ env.VERSION }}
-        Commit: ${{ env.COMMIT }}
-        BuildDate: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-        BuildOS: ${{ runner.os }}
-        BuildArch: $(uname -m)
-        EOF
       shell: bash
 
-    - name: Create source tarball
-      if: ${{ inputs.include_source == 'true' && runner.os == 'Linux' }}
+    - name: Package source tarball
+      if: runner.os == 'Linux'
       run: |
-        mkdir -p dist/source
-        # Create reproducible source tarball
-        tar czf dist/source/${{ inputs.name }}-${{ env.VERSION }}-src.tar.gz \
+        mkdir -p dist
+        tar czf dist/${{ inputs.name }}-${{ env.VERSION }}-src.tar.gz \
           --exclude=.git \
           --exclude=dist \
           --exclude=stage \
-          --exclude=*.deb \
-          --exclude=*.rpm \
-          --exclude=*.apk \
-          --exclude=*.pkg.tar.* \
-          --transform "s|^|${{ inputs.name }}-${{ env.VERSION }}/|" \
           .
-
-        # Also create a minimal source tarball
-        find . -name "*.c" -o -name "*.h" -o -name "*.mk" -o -name "Makefile" -o -name "*.md" -o -name "LICENSE" | \
-          tar czf dist/source/${{ inputs.name }}-${{ env.VERSION }}-minimal-src.tar.gz -T - \
-          --transform "s|^|${{ inputs.name }}-${{ env.VERSION }}/|"
       shell: bash
 
     - name: Install packaging tools (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
+        sudo rm -f /var/lib/man-db/auto-update
         sudo apt-get install -y ruby ruby-dev build-essential libarchive-tools rpm
         sudo gem install --no-document fpm
       shell: bash
 
-    - name: Package Linux (DEB, RPM, APK, PACMAN)
+    - name: Package Linux
       if: runner.os == 'Linux'
       run: |
-        mkdir -p dist/packages
+        mkdir -p dist
         DEPENDS_OPTS=""
         if [ -n "${{ inputs.deps }}" ]; then
           for dep in $(echo "${{ inputs.deps }}" | tr ',' ' '); do
@@ -175,7 +129,7 @@ runs:
 
         echo "Detected architecture: $ARCH"
 
-        # Build DEB package
+        # Build packages
         fpm -s dir -t deb -n ${{ inputs.name }} -v ${{ env.VERSION }} \
             -C stage \
             --license "$LICENSE" \
@@ -211,7 +165,7 @@ runs:
             --architecture "$ARCH" \
             $DEPENDS_OPTS
 
-        # Build Pacman package (may fail if bsdtar not available)
+        # Build Pacman package
         fpm -s dir -t pacman -n ${{ inputs.name }} -v ${{ env.VERSION }} \
             -C stage \
             --license "$LICENSE" \
@@ -221,177 +175,83 @@ runs:
             --description "$DESC" \
             --category "devel" \
             --architecture "$ARCH" \
-            $DEPENDS_OPTS || echo "Pacman package build failed (non-critical)"
+            $DEPENDS_OPTS || echo "Pacman package build failed"
 
-        # Move packages to dist/packages
-        mv *.deb *.rpm *.apk *.pkg.tar.* dist/packages/ 2>/dev/null || true
+        mv *.deb *.rpm *.apk *.pkg.tar.* dist/ 2>/dev/null || true
       shell: bash
 
     - name: Package macOS
       if: runner.os == 'macOS'
       run: |
-        mkdir -p dist/packages
+        mkdir -p dist
 
-        # Create architecture-specific tarball
+        # Detect architecture
         ARCH=$(uname -m)
-        tar czf dist/packages/${{ inputs.name }}-${{ env.VERSION }}-macos-$ARCH.tar.gz -C stage .
+        echo "Building for macOS architecture: $ARCH"
 
-        # Also create universal tarball
-        tar czf dist/packages/${{ inputs.name }}-${{ env.VERSION }}-macos-universal.tar.gz -C stage .
+        # Create proper macOS package structure
+        PKG_ROOT="pkgroot"
+        mkdir -p "$PKG_ROOT/${{ inputs.prefix }}"
+        
+        # Copy installed files to package root
+        cp -R stage/* "$PKG_ROOT/${{ inputs.prefix }}/" 2>/dev/null || true
 
-        # Try to create pkg if tools available
-        if command -v pkgbuild >/dev/null 2>&1; then
-          echo "Building macOS installer package..."
-          
-          cat > Distribution.xml << EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <installer-gui-script minSpecVersion="1">
-              <title>${{ inputs.name }} - ${{ env.VERSION }}</title>
-              <organization>com.${{ github.repository_owner }}.${{ inputs.name }}</organization>
-              <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
-              <options customize="never" require-scripts="false"/>
-              <pkg-ref id="com.${{ github.repository_owner }}.${{ inputs.name }}.pkg"/>
-              <choices-outline>
-                  <line choice="default">
-                      <line choice="com.${{ github.repository_owner }}.${{ inputs.name }}.pkg"/>
-                  </line>
-              </choices-outline>
-              <choice id="default"/>
-              <choice id="com.${{ github.repository_owner }}.${{ inputs.name }}.pkg" visible="false">
-                  <pkg-ref id="com.${{ github.repository_owner }}.${{ inputs.name }}.pkg"/>
-              </choice>
-              <pkg-ref id="com.${{ github.repository_owner }}.${{ inputs.name }}.pkg" version="${{ env.VERSION }}" onConclusion="none">${{ inputs.name }}-${{ env.VERSION }}.pkg</pkg-ref>
-          </installer-gui-script>
-          EOF
+        # Create component property list file
+        cat > Distribution.xml << EOF
+        <?xml version="1.0" encoding="utf-8"?>
+        <installer-script minSpecVersion="1.000000">
+            <title>${{ inputs.name }}-${{ env.VERSION }}</title>
+            <organization>com.${{ github.repository_owner }}</organization>
+            <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+            <options customize="never" require-scripts="false"/>
+            <pkg-ref id="com.${{ github.repository_owner }}.${{ inputs.name }}"/>
+            <choices-outline>
+                <line choice="default">
+                    <line choice="com.${{ github.repository_owner }}.${{ inputs.name }}"/>
+                </line>
+            </choices-outline>
+            <choice id="default"/>
+            <choice id="com.${{ github.repository_owner }}.${{ inputs.name }}" visible="false">
+                <pkg-ref id="com.${{ github.repository_owner }}.${{ inputs.name }}"/>
+            </choice>
+            <pkg-ref id="com.${{ github.repository_owner }}.${{ inputs.name }}" version="${{ env.VERSION }}" onConclusion="none">${{ inputs.name }}-${{ env.VERSION }}-$ARCH.pkg</pkg-ref>
+        </installer-script>
+        EOF
 
-          pkgbuild \
-            --identifier "com.${{ github.repository_owner }}.${{ inputs.name }}" \
-            --version "${{ env.VERSION }}" \
-            --root stage \
-            --install-location "${{ inputs.prefix }}" \
-            "${{ inputs.name }}-${{ env.VERSION }}.pkg"
+        # Create package using pkgbuild and productbuild
+        pkgbuild --root "$PKG_ROOT" \
+                 --identifier "com.${{ github.repository_owner }}.${{ inputs.name }}" \
+                 --version "${{ env.VERSION }}" \
+                 --install-location "${{ inputs.prefix }}" \
+                 "${{ inputs.name }}-${{ env.VERSION }}-$ARCH.pkg"
 
-          productbuild \
-            --distribution Distribution.xml \
-            --package-path "." \
-            --resources "." \
-            "dist/packages/${{ inputs.name }}-${{ env.VERSION }}-macos.pkg"
-          
-          rm -f "${{ inputs.name }}-${{ env.VERSION }}.pkg" Distribution.xml
-        fi
+        # Also create a tarball for direct installation
+        tar czf "${{ inputs.name }}-${{ env.VERSION }}-macos-$ARCH.tar.gz" -C stage .
+
+        # Move all artifacts to dist
+        mv *.pkg *.tar.gz dist/
+
+        echo "macOS packaging complete. Contents:"
+        ls -la dist/
       shell: bash
 
     - name: Package Windows
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        mkdir dist/packages
-        $version = "${{ env.VERSION }}"
-        $name = "${{ inputs.name }}"
+        mkdir dist
+        Compress-Archive -Path stage\* -DestinationPath dist\${{ inputs.name }}-${{ env.VERSION }}-win.zip
 
-        # Create zip archive
-        Compress-Archive -Path stage\* -DestinationPath "dist/packages/$name-$version-windows.zip"
-
-        # Also create a tar.gz for consistency
-        tar -czf "dist/packages/$name-$version-windows.tar.gz" -C stage .
-
-    - name: Generate comprehensive checksums
-      if: ${{ inputs.include_checksums == 'true' }}
+    - name: Generate checksums
       run: |
-        mkdir -p dist
         cd dist
-
-        # Generate checksums for all files recursively
-        find . -type f -not -name SHA256SUMS -not -name SHA256SUMS.asc -not -name BUILD_INFO | \
-          xargs -I {} shasum -a 256 {} > SHA256SUMS
-
-        # Create build info file
-        cat > BUILD_INFO << EOF
-        Package: ${{ inputs.name }}
-        Version: ${{ env.VERSION }}
-        GitCommit: ${{ env.COMMIT }}
-        GitCommitShort: ${{ env.COMMIT_SHORT }}
-        Branch: ${{ env.BRANCH }}
-        BuildDate: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-        BuildRunner: ${{ runner.os }}-${{ runner.arch }}
-        BuildURL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        Source: ${{ github.server_url }}/${{ github.repository }}/tree/${{ env.COMMIT }}
-        EOF
-
-        echo "Generated checksums for:"
+        find . -type f -name "*" | xargs shasum -a 256 > SHA256SUMS
+        echo "Generated checksums:"
         cat SHA256SUMS
-        echo ""
-        echo "Build info:"
-        cat BUILD_INFO
-      shell: bash
-
-    - name: Create installation instructions
-      run: |
-        mkdir -p dist/docs
-        cat > dist/docs/INSTALL.md << 'EOF'
-        # Installation Instructions
-
-        ## Package Manager Installation
-
-        ### Debian/Ubuntu (APT)
-        ```bash
-        echo "deb [trusted=yes] http://tty.pt/apt stable main" | sudo tee /etc/apt/sources.list.d/ttypt.list
-        sudo apt update
-        sudo apt install ${{ inputs.name }}
-        ```
-
-        ### Alpine Linux (APK)
-        ```bash
-        echo "https://tty.pt/apk" >> /etc/apk/repositories
-        wget -O /etc/apk/keys/ttypt.rsa.pub https://tty.pt/apk/key.pub
-        apk update
-        apk add ${{ inputs.name }}
-        ```
-
-        ### Arch Linux (Pacman)
-        ```bash
-        echo -e "\n[ttypt]\nSigLevel = Optional TrustAll\nServer = https://tty.pt/pacman/\$arch" | sudo tee -a /etc/pacman.conf
-        sudo pacman -Sy
-        sudo pacman -S ttypt/${{ inputs.name }}
-        ```
-
-        ## Manual Installation
-
-        ### From Source
-        ```bash
-        tar xzf ${{ inputs.name }}-${{ env.VERSION }}-src.tar.gz
-        cd ${{ inputs.name }}-${{ env.VERSION }}
-        make
-        sudo make install
-        ```
-
-        ### From Binary Tarball
-        ```bash
-        # Download appropriate tarball for your OS/architecture
-        tar xzf ${{ inputs.name }}-${{ env.VERSION }}-[os]-[arch].tar.gz -C /usr/local --strip-components=1
-        ```
-
-        ## Verification
-
-        Verify checksums:
-        ```bash
-        shasum -a 256 -c SHA256SUMS
-        ```
-
-        ## Support
-        - Issues: ${{ github.server_url }}/${{ github.repository }}/issues
-        - Source: ${{ github.server_url }}/${{ github.repository }}
-        EOF
       shell: bash
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.name }}-${{ runner.os }}
-        path: |
-          dist/packages/*
-          dist/source/*
-          dist/docs/*
-          dist/SHA256SUMS
-          dist/BUILD_INFO
-        retention-days: 30
+        path: dist/*

@@ -55,13 +55,15 @@ runs:
       run: |
         mkdir -p repo/pool/main
         for deb in ${{ inputs.source }}; do
-          pkg=$(dpkg-deb -f "$deb" Package)
-          ver=$(dpkg-deb -f "$deb" Version)
-          arch=$(dpkg-deb -f "$deb" Architecture)
-          firstletter=$(echo "$pkg" | cut -c1 | tr '[:upper:]' '[:lower:]')
-          target="repo/pool/main/$firstletter/$pkg"
-          mkdir -p "$target"
-          cp "$deb" "$target/${pkg}_${ver}_${arch}.deb"
+          if [ -f "$deb" ] && [[ "$deb" == *.deb ]]; then
+            pkg=$(dpkg-deb -f "$deb" Package)
+            ver=$(dpkg-deb -f "$deb" Version)
+            arch=$(dpkg-deb -f "$deb" Architecture)
+            firstletter=$(echo "$pkg" | cut -c1 | tr '[:upper:]' '[:lower:]')
+            target="repo/pool/main/$firstletter/$pkg"
+            mkdir -p "$target"
+            cp "$deb" "$target/${pkg}_${ver}_${arch}.deb"
+          fi
         done
       shell: bash
 
@@ -133,7 +135,7 @@ runs:
         set -euo pipefail
         key="${{ inputs.gpg_keyid }}"
 
-        # Sanity: make sure Release exists and isn’t empty
+        # Sanity: make sure Release exists and isn't empty
         test -s repo/dists/stable/Release
 
         # Sign inline

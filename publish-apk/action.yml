@@ -76,18 +76,18 @@ runs:
     - name: Merge new packages and update index
       run: |
         mkdir -p repo/x86_64
+        
+        # Only copy .apk files
         for apk in ${{ inputs.source }}; do
-          if [ -f "$apk" ]; then
-            echo "Copying $apk to repo"
+          if [ -f "$apk" ] && [[ "$apk" == *.apk ]]; then
+            echo "Copying APK: $(basename "$apk")"
             cp "$apk" repo/x86_64/
-          else
-            echo "Warning: $apk not found, skipping"
-            continue
           fi
         done
         
         # Check if we have any APK files to process
-        if [ -z "$(ls -A repo/x86_64/*.apk 2>/dev/null)" ]; then
+        APK_COUNT=$(ls repo/x86_64/*.apk 2>/dev/null | wc -l)
+        if [ "$APK_COUNT" -eq 0 ]; then
           echo "No APK files found to process"
           exit 0
         fi

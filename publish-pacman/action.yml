@@ -63,18 +63,18 @@ runs:
     - name: Merge new packages and update database
       run: |
         mkdir -p repo/x86_64
+        
+        # Only copy .pkg.tar.* files
         for pkg in ${{ inputs.source }}; do
-          if [ -f "$pkg" ]; then
-            echo "Copying $pkg to repo"
+          if [ -f "$pkg" ] && [[ "$pkg" == *.pkg.tar.* ]]; then
+            echo "Copying Pacman package: $(basename "$pkg")"
             cp "$pkg" repo/x86_64/
-          else
-            echo "Warning: $pkg not found, skipping"
-            continue
           fi
         done
         
         # Check if we have any packages to process
-        if [ -z "$(ls repo/x86_64/*.pkg.tar.* 2>/dev/null)" ]; then
+        PKG_COUNT=$(ls repo/x86_64/*.pkg.tar.* 2>/dev/null | wc -l)
+        if [ "$PKG_COUNT" -eq 0 ]; then
           echo "No Pacman packages found to process"
           exit 0
         fi
