@@ -14,12 +14,12 @@ on:
       targets:
         description: "OS build targets (ubuntu-latest, macos-latest, windows-latest)"
         required: false
-        default: "ubuntu-latest"
+        default: "ubuntu-latest,macos-latest"
         type: string
       publish_to:
         description: "Package managers to publish to (apt,apk or both)"
         required: false
-        default: "apt,apk,pacman"
+        default: "apt,apk,pacman,macos"
         type: string
     secrets:
       HOST:
@@ -56,9 +56,29 @@ jobs:
         with:
           path: dist
 
+      - name: Combine checksums from all artifacts
+        run: |
+          mkdir -p dist/combined
+          # Combine all SHA256SUMS files
+          find dist -name "SHA256SUMS" -exec cat {} \; | sort -u > dist/combined/SHA256SUMS 2>/dev/null || echo "No checksums to combine"
+
+          # Combine all BUILD_INFO files
+          find dist -name "BUILD_INFO" -exec head -1 {} \; | uniq > dist/combined/BUILD_INFO 2>/dev/null || echo "No build info to combine"
+
+          # Copy all packages and source files to combined
+          find dist -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.apk" -o -name "*.pkg.tar.*" -o -name "*.tar.gz" -o -name "*.zip" -o -name "*.pkg" \) -exec cp {} dist/combined/ \;
+
+          # Copy documentation
+          find dist -name "INSTALL.md" -exec cp {} dist/combined/ \; 2>/dev/null || true
+
+          echo "Combined release assets:"
+          ls -la dist/combined/
+        shell: bash
+
       - uses: tty-pt/ci/release@main
         with:
-          files: dist/**/*
+          files: dist/combined/**
+          generate_release_notes: true
 
   publish:
     runs-on: ubuntu-latest
@@ -73,7 +93,7 @@ jobs:
       - uses: tty-pt/ci/publish-apt@main
         if: ${{ contains(inputs.publish_to, 'apt') }}
         with:
-          source: dist/*.deb
+          source: dist/packages/*.deb
           host: ${{ secrets.HOST }}
           user: ${{ secrets.USER }}
           ssh_key: ${{ secrets.SSH_KEY }}
@@ -84,7 +104,7 @@ jobs:
       - uses: tty-pt/ci/publish-apk@main
         if: ${{ contains(inputs.publish_to, 'apk') }}
         with:
-          source: dist/*.apk
+          source: dist/packages/*.apk
           host: ${{ secrets.HOST }}
           user: ${{ secrets.USER }}
           ssh_key: ${{ secrets.SSH_KEY }}
@@ -93,8 +113,9 @@ jobs:
           gpg_keyid: ${{ secrets.GPG_KEYID }}
 
       - uses: tty-pt/ci/publish-pacman@main
+        if: ${{ contains(inputs.publish_to, 'pacman') }}
         with:
-          source: dist/*.pkg.tar.*
+          source: dist/packages/*.pkg.tar.*
           host: ${{ secrets.HOST }}
           user: ${{ secrets.USER }}
           ssh_key: ${{ secrets.SSH_KEY }}
@@ -102,3 +123,14 @@ jobs:
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
           gpg_keyid: ${{ secrets.GPG_KEYID }}
           repo_name: ${{ github.repository_owner }}
+
+      - uses: tty-pt/ci/publish-macos@main
+        with:
+          source: dist/packages/*macos*
+          host: ${{ secrets.HOST }}
+          user: ${{ secrets.USER }}
+          ssh_key: ${{ secrets.SSH_KEY }}
+          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+          gpg_keyid: ${{ secrets.GPG_KEYID }}
+          developer_id_installer: ${{ secrets.DEVELOPER_ID_INSTALLER }}

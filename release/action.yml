@@ -1,34 +1,95 @@
 name: 'release'
-description: 'Publish artifacts to a GitHub Release with changelog section as notes'
+description: 'Publish comprehensive release with packages, source, checksums, and documentation'
 author: 'tty-pt'
 
 inputs:
   files:
-    description: 'Glob of files to upload (e.g. dist/*)'
+    description: 'Glob of files to upload (e.g. dist/**)'
     required: true
+  include_checksums:
+    description: 'Include checksums in release'
+    required: false
+    default: 'true'
+  generate_release_notes:
+    description: 'Automatically generate release notes from changelog'
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
   steps:
     - name: Extract release notes
-      if: startsWith(github.ref, 'refs/tags/')
+      if: ${{ inputs.generate_release_notes == 'true' && startsWith(github.ref, 'refs/tags/') }}
       run: |
         TAG=${GITHUB_REF_NAME#v}
         if [ -f CHANGELOG.md ]; then
-          awk "/^## \\[$TAG\\]/ {print; flag=1; next} /^## \\[/ && flag {flag=0} flag {print}" CHANGELOG.md > RELEASE_NOTES.md
+          # Extract changelog section for this version
+          awk "/^## \\[$TAG\\]|^## $TAG/ {found=1; next} /^## \\[/ && found {exit} found {print}" CHANGELOG.md > RELEASE_NOTES.md
+
           if [ ! -s RELEASE_NOTES.md ]; then
-            echo "No changelog section for $TAG, using repo description." > RELEASE_NOTES.md
-            echo "${{ github.event.repository.description }}" >> RELEASE_NOTES.md
+            echo "No changelog section for $TAG, generating basic release notes." > RELEASE_NOTES.md
+            echo "## $TAG" >> RELEASE_NOTES.md
+            echo "" >> RELEASE_NOTES.md
+            echo "### Changes" >> RELEASE_NOTES.md
+            echo "- Version $TAG release" >> RELEASE_NOTES.md
+            echo "- Built from commit: $(git rev-parse --short HEAD)" >> RELEASE_NOTES.md
+            echo "- Build date: $(date -u +%Y-%m-%d)" >> RELEASE_NOTES.md
           fi
         else
-          echo "${{ github.event.repository.description }}" > RELEASE_NOTES.md
+          echo "## $TAG" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "### Package Information" >> RELEASE_NOTES.md
+          echo "- Version: $TAG" >> RELEASE_NOTES.md
+          echo "- Commit: $(git rev-parse --short HEAD)" >> RELEASE_NOTES.md
+          echo "- Build date: $(date -u +%Y-%m-%d)" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "### Installation" >> RELEASE_NOTES.md
+          echo "See INSTALL.md in the release assets." >> RELEASE_NOTES.md
+        fi
+
+        # Add verification section if checksums are included
+        if [ -f dist/SHA256SUMS ]; then
+          echo "" >> RELEASE_NOTES.md
+          echo "### Verification" >> RELEASE_NOTES.md
+          echo "Verify package integrity with:" >> RELEASE_NOTES.md
+          echo '```bash' >> RELEASE_NOTES.md
+          echo "shasum -a 256 -c SHA256SUMS" >> RELEASE_NOTES.md
+          echo '```' >> RELEASE_NOTES.md
         fi
       shell: bash
 
-    - name: Publish release
+    - name: Organize release assets
+      run: |
+        # Create organized directory structure for release
+        mkdir -p release-assets
+
+        # Copy all artifacts to organized structure
+        cp -r dist/* release-assets/ 2>/dev/null || true
+
+        # Ensure critical files are present
+        if [ ! -f release-assets/SHA256SUMS ] && [ -f dist/SHA256SUMS ]; then
+          cp dist/SHA256SUMS release-assets/
+        fi
+
+        if [ ! -f release-assets/BUILD_INFO ] && [ -f dist/BUILD_INFO ]; then
+          cp dist/BUILD_INFO release-assets/
+        fi
+
+        echo "Release assets organized:"
+        find release-assets -type f | sort
+      shell: bash
+
+    - name: Publish comprehensive release
       uses: softprops/action-gh-release@v1
       with:
-        files: ${{ inputs.files }}
+        files: |
+          release-assets/packages/*
+          release-assets/source/*
+          release-assets/docs/*
+          release-assets/SHA256SUMS
+          release-assets/BUILD_INFO
         body_path: RELEASE_NOTES.md
+        draft: false
+        prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') || contains(github.ref, 'rc') }}
       env:
         GITHUB_TOKEN: ${{ github.token }}

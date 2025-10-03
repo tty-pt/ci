@@ -1,0 +1,310 @@
+name: 'publish-macos'
+description: 'Publish and sign macOS packages and binaries'
+author: 'tty-pt'
+
+inputs:
+  source:
+    description: 'Glob for macOS artifacts (e.g., dist/*macos*)'
+    required: true
+  host:
+    description: 'Server hostname'
+    required: true
+  user:
+    description: 'Server user'
+    required: true
+  ssh_key:
+    description: 'Private SSH key'
+    required: true
+  create_homebrew_tap:
+    description: 'Whether to create Homebrew formula'
+    required: false
+    default: "true"
+  gpg_key:
+    description: 'Private GPG key (ASCII-armored)'
+    required: false
+    default: ""
+  gpg_keyid:
+    description: 'Key ID or fingerprint to use when signing'
+    required: false
+  gpg_pass:
+    description: 'Passphrase for the GPG key (if any)'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ inputs.ssh_key }}" > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+        ssh-keyscan -H ${{ inputs.host }} >> ~/.ssh/known_hosts
+      shell: bash
+
+    - name: Import GPG key
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        echo "${{ inputs.gpg_key }}" | gpg --batch --import
+        gpg --list-secret-keys --keyid-format=long
+      shell: bash
+
+    - name: Create initial directory structure on server
+      run: |
+        ssh -i ~/.ssh/id_ed25519 ${{ inputs.user }}@${{ inputs.host }} "
+          mkdir -p /var/www/htdocs/macos/{versions,universal,arm64,x86_64} || true
+        "
+      shell: bash
+
+    - name: Fetch current macOS dist from server
+      run: |
+        mkdir -p repo
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/macos/ repo/ || echo "Initial sync completed (empty directory is OK)"
+      shell: bash
+
+    - name: Check for macOS packages and extract version
+      run: |
+        echo "Checking for macOS packages..."
+        find dist/ -name "*macos*" -type f | head -5 || echo "No macOS packages found"
+        
+        # Extract version from macOS packages only
+        MACOS_PKG=$(find dist/ -name "*macos*" -type f | head -1)
+        if [ -n "$MACOS_PKG" ]; then
+          VERSION=$(echo "$MACOS_PKG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        fi
+        
+        if [ -z "$VERSION" ]; then
+          # Try to get version from environment or use date
+          if [ -n "${{ env.VERSION }}" ]; then
+            VERSION="${{ env.VERSION }}"
+          else
+            VERSION=$(date +%Y%m%d)
+            echo "Using date-based version: $VERSION"
+          fi
+        fi
+        
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "Using version: $VERSION"
+      shell: bash
+
+    - name: Create versioned directory structure
+      run: |
+        mkdir -p repo/versions/$VERSION
+        mkdir -p repo/universal
+        mkdir -p repo/arm64
+        mkdir -p repo/x86_64
+        
+        # Copy only macOS packages (not source tarballs)
+        for artifact in ${{ inputs.source }}; do
+          if [ -f "$artifact" ] && [[ "$artifact" == *"macos"* ]]; then
+            echo "Copying macOS package: $(basename "$artifact")"
+            cp "$artifact" repo/versions/$VERSION/
+            
+            # Also copy to architecture-specific directories
+            if [[ "$artifact" == *"universal"* ]]; then
+              cp "$artifact" repo/universal/
+            elif [[ "$artifact" == *"arm64"* ]]; then
+              cp "$artifact" repo/arm64/
+            elif [[ "$artifact" == *"x86_64"* ]]; then
+              cp "$artifact" repo/x86_64/
+            elif [[ "$artifact" == *".pkg"* ]]; then
+              # .pkg files go to universal by default
+              cp "$artifact" repo/universal/
+            fi
+          elif [ -f "$artifact" ]; then
+            echo "Skipping non-macOS file: $(basename "$artifact")"
+          fi
+        done
+        
+        # Check if we actually copied any macOS packages
+        if [ -z "$(ls -A repo/versions/$VERSION/ 2>/dev/null)" ]; then
+          echo "Warning: No macOS packages were copied to version directory"
+          # Create a placeholder so directory structure exists
+          touch repo/versions/$VERSION/placeholder.txt
+        fi
+        
+        # Create checksums for actual macOS packages
+        cd repo/versions/$VERSION
+        if [ -n "$(ls -A . 2>/dev/null)" ]; then
+          shasum -a 256 * > SHA256SUMS 2>/dev/null || echo "No files to checksum"
+          echo "Created SHA256SUMS with:"
+          ls -la
+          cat SHA256SUMS 2>/dev/null || echo "SHA256SUMS is empty"
+        else
+          echo "No files in version directory to checksum"
+        fi
+        
+        # Update latest symlink
+        cd ../..
+        rm -f latest
+        ln -sf versions/$VERSION latest
+        
+        # Create directory listing
+        find . -type f \( -name "*.tar.gz" -o -name "*.pkg" -o -name "SHA256SUMS*" \) | sort > files.txt 2>/dev/null || echo "No files for listing"
+      shell: bash
+
+    - name: Sign checksums with GPG
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        cd repo/versions/$VERSION
+        if [ -f "SHA256SUMS" ] && [ -s "SHA256SUMS" ]; then
+          echo "Signing SHA256SUMS with GPG..."
+          gpg --batch --yes --detach-sign --armor -u "${{ inputs.gpg_keyid }}" SHA256SUMS
+          echo "✓ Signed checksums with GPG"
+          ls -la SHA256SUMS*
+        else
+          echo "No SHA256SUMS file found or file is empty, skipping GPG signing"
+        fi
+      shell: bash
+
+    - name: Create Homebrew formula
+      if: ${{ inputs.create_homebrew_tap == 'true' }}
+      run: |
+        # Extract package information for Homebrew formula
+        NAME="${{ inputs.name }}"
+        VERSION="$VERSION"
+        DESC="${{ github.event.repository.description }}"
+        if [ -z "$DESC" ]; then
+          DESC="C library $NAME"
+        fi
+        HOMEPAGE="https://github.com/${{ github.repository }}"
+        
+        # Find universal tarball for SHA256
+        UNIVERSAL_TARBALL=$(find repo/universal -name "*.tar.gz" | head -1)
+        if [ -n "$UNIVERSAL_TARBALL" ]; then
+          SHA256=$(shasum -a 256 "$UNIVERSAL_TARBALL" | cut -d' ' -f1)
+          
+          cat > repo/$NAME.rb << EOF
+          class ${NAME^} < Formula
+            desc "$DESC"
+            homepage "$HOMEPAGE"
+            url "https://tty.pt/macos/universal/$(basename $UNIVERSAL_TARBALL)"
+            sha256 "$SHA256"
+            license "MIT"
+            
+            def install
+              # Copy all files to the prefix
+              prefix.install Dir["*"]
+              
+              # Create symlinks for binaries if they exist
+              if File.exist?("\#{prefix}/bin")
+                bin.install Dir["\#{prefix}/bin/*"]
+              end
+              
+              if File.exist?("\#{prefix}/lib")
+                lib.install Dir["\#{prefix}/lib/*"]
+              end
+              
+              if File.exist?("\#{prefix}/include")
+                include.install Dir["\#{prefix}/include/*"]
+              end
+            end
+            
+            test do
+              # Simple test to verify installation
+              system "\#{bin}/$NAME", "--version" if File.exist?("\#{bin}/$NAME")
+            end
+          end
+          EOF
+          echo "Homebrew formula created: $NAME.rb"
+        else
+          echo "No universal tarball found, skipping Homebrew formula"
+        fi
+      shell: bash
+
+    - name: Create installation script
+      run: |
+        cat > repo/install.sh << 'EOF'
+        #!/bin/bash
+        # Installation script for ${{ inputs.name }}
+        # Distribution from tty.pt
+        
+        set -e
+        
+        REPO_URL="https://tty.pt/macos"
+        LATEST_URL="$REPO_URL/latest"
+        
+        echo "Installing ${{ inputs.name }} from tty.pt..."
+        
+        # Detect architecture
+        ARCH=$(uname -m)
+        case $ARCH in
+            x86_64) 
+                ARCH_SUFFIX="x86_64"
+                ;;
+            arm64)
+                ARCH_SUFFIX="arm64" 
+                ;;
+            *)
+                ARCH_SUFFIX="universal"
+                ;;
+        esac
+        
+        echo "Downloading package for $ARCH..."
+        
+        # Get the actual filename
+        FILENAME=$(curl -s $LATEST_URL/files.txt | grep "$ARCH_SUFFIX.tar.gz" | head -1)
+        
+        if [ -z "$FILENAME" ]; then
+            # Fallback to universal
+            FILENAME=$(curl -s $LATEST_URL/files.txt | grep "universal.tar.gz" | head -1)
+        fi
+        
+        if [ -z "$FILENAME" ]; then
+            echo "Error: No package found for your architecture"
+            exit 1
+        fi
+        
+        DOWNLOAD_URL="$LATEST_URL/$FILENAME"
+        
+        # Download files
+        cd /tmp
+        curl -fsSL -o package.tar.gz "$DOWNLOAD_URL"
+        curl -fsSL -o SHA256SUMS "$LATEST_URL/SHA256SUMS"
+        
+        # Verify checksum if SHA256SUMS exists and has content
+        if [ -s "SHA256SUMS" ]; then
+            echo "Verifying package checksum..."
+            grep "$FILENAME" SHA256SUMS | shasum -a 256 -c -
+        else
+            echo "Warning: No checksums available, skipping verification"
+        fi
+        
+        # Extract to /usr/local
+        echo "Installing to /usr/local..."
+        sudo tar xzf package.tar.gz -C /usr/local --strip-components=1
+        
+        # Cleanup
+        rm -f package.tar.gz SHA256SUMS
+        
+        echo "Installation complete!"
+        echo "You can now run: ${{ inputs.name }} --version"
+        EOF
+        
+        chmod +x repo/install.sh
+      shell: bash
+
+    - name: Distribute GPG public key
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        # Export GPG public key for clients
+        gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/key.pub
+        echo "Public key available at: https://tty.pt/macos/key.pub"
+      shell: bash
+
+    - name: Push to server
+      run: |
+        echo "Publishing macOS distribution to server..."
+        # Ensure remote directory exists
+        ssh -i ~/.ssh/id_ed25519 ${{ inputs.user }}@${{ inputs.host }} "
+          mkdir -p /var/www/htdocs/macos/{versions,universal,arm64,x86_64}
+        "
+        
+        # Push with more verbose output
+        echo "Syncing files to server..."
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" repo/ \
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/macos/
+        
+        echo "macOS distribution published successfully!"
+        echo "Available at: https://tty.pt/macos/"
+      shell: bash
