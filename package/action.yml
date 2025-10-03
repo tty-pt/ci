@@ -1,5 +1,5 @@
 name: 'package'
-description: 'Compile C projects with include.mk and package for Linux (deb,rpm), Windows (zip), OpenBSD (tar.gz) and source tarball'
+description: 'Compile C projects with include.mk and package for Linux (deb,rpm,apk), Windows (zip), OpenBSD (tar.gz) and source tarball'
 author: 'tty-pt'
 
 inputs:
@@ -37,7 +37,6 @@ runs:
         fi
       shell: bash
 
-
     - name: Install build deps (Linux)
       if: runner.os == 'Linux'
       run: |
@@ -68,7 +67,7 @@ runs:
           .
       shell: bash
 
-    - name: Install deps (Linux)
+    - name: Install packaging tools (Linux)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
@@ -76,7 +75,7 @@ runs:
         sudo gem install --no-document fpm
       shell: bash
 
-    - name: Package Linux
+    - name: Package Linux (DEB, RPM, APK)
       if: runner.os == 'Linux'
       run: |
         mkdir -p dist
@@ -96,6 +95,27 @@ runs:
           DESC="C library ${{ inputs.name }}"
         fi
 
+        # Detect architecture from built binaries
+        ARCH="amd64"
+        # Look for binaries in stage directory to determine actual architecture
+        if find stage -type f -executable | grep -q .; then
+          # We have binaries, check their architecture
+          BINARY=$(find stage -type f -executable | head -1)
+          if file "$BINARY" | grep -q "ARM"; then
+            ARCH="arm64"
+          elif file "$BINARY" | grep -q "x86-64"; then
+            ARCH="x86_64"
+          elif file "$BINARY" | grep -q "80386"; then
+            ARCH="x86"
+          fi
+        else
+          # No binaries found, this might be a header-only or architecture-independent library
+          echo "No binaries found, this appears to be an architecture-independent package"
+        fi
+
+        echo "Detected architecture: $ARCH"
+
+        # Build DEB package
         fpm -s dir -t deb -n ${{ inputs.name }} -v ${{ env.VERSION }} \
             -C stage \
             --license "$LICENSE" \
@@ -104,8 +124,10 @@ runs:
             --url "$HOMEPAGE" \
             --description "$DESC" \
             --category "devel" \
+            --architecture "$ARCH" \
             $DEPENDS_OPTS
 
+        # Build RPM package  
         fpm -s dir -t rpm -n ${{ inputs.name }} -v ${{ env.VERSION }} \
             -C stage \
             --license "$LICENSE" \
@@ -114,10 +136,30 @@ runs:
             --url "$HOMEPAGE" \
             --description "$DESC" \
             --category "devel" \
+            --architecture "$ARCH" \
             $DEPENDS_OPTS
 
-        mv *.deb *.rpm dist/
+        # Build APK package - explicitly set architecture
+        fpm -s dir -t apk -n ${{ inputs.name }} -v ${{ env.VERSION }} \
+            -C stage \
+            --license "$LICENSE" \
+            --vendor "$VENDOR" \
+            --maintainer "$MAINTAINER" \
+            --url "$HOMEPAGE" \
+            --description "$DESC" \
+            --category "devel" \
+            --architecture "$ARCH" \
+            $DEPENDS_OPTS
 
+        # Move all packages to dist directory
+        mv *.deb *.rpm *.apk dist/ 2>/dev/null || true
+        
+        echo "Packages built:"
+        ls -la dist/
+        echo "Package architectures:"
+        for pkg in dist/*; do
+          echo "$(basename $pkg): $(file $pkg | cut -d: -f2-)"
+        done
       shell: bash
 
     - name: Package Windows

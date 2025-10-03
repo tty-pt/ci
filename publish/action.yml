@@ -74,23 +74,23 @@ runs:
         Dir {
           ArchiveDir "repo";
           CacheDir   "repo/.cache";
-        }
+        };
         Default {
           Packages::Compress ". gzip bzip2 xz";
           Sources::Compress  ". gzip bzip2 xz";
           Contents::Compress ". gzip bzip2 xz";
-        }
+        };
         TreeDefault {
           Directory  "pool/main";
           Packages   "dists/stable/main/binary-amd64/Packages";
           Contents   "dists/stable/main/Contents-amd64";
-        }
+        };
         BinDirectory "pool/main" {
           Packages "dists/stable/main/binary-amd64/Packages";
           Contents "dists/stable/main/Contents-amd64";
-          Arch amd64;
-          Section main;
-        }
+          Architectures "amd64";
+          Section "main";
+        };
         APT::FTPArchive::Release {
           Origin "$ORIGIN";
           Label "$ORIGIN";
@@ -99,10 +99,12 @@ runs:
           Components "main";
           Architectures "amd64";
           Acquire-By-Hash "yes";
-        }
+          Description "APT repository for $ORIGIN";
+        };
         EOF
 
         apt-ftparchive generate apt-ftparchive.conf
+        gzip -kf repo/dists/stable/main/binary-amd64/Packages
         apt-ftparchive -c apt-ftparchive.conf release repo/dists/stable > repo/dists/stable/Release
       shell: bash
 
@@ -112,6 +114,17 @@ runs:
         echo "${{ inputs.gpg_key }}" | gpg --batch --import
         echo "${{ inputs.gpg_keyid }}"
         gpg --list-secret-keys --keyid-format=long
+      shell: bash
+
+    - name: Export and distribute GPG public key
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        # Export the public key
+        gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/archive-key.gpg
+
+        # Also create a keyring file in the keyrings directory (modern apt approach)
+        mkdir -p repo/keyrings
+        gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/keyrings/archive-key.gpg
       shell: bash
 
     - name: Sign Release
@@ -134,6 +147,16 @@ runs:
             --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
             --digest-algo SHA256 \
             -abs -o repo/dists/stable/Release.gpg repo/dists/stable/Release
+
+        # Verify the signatures were created
+        echo "=== Verifying signatures ==="
+        test -s repo/dists/stable/InRelease
+        test -s repo/dists/stable/Release.gpg
+        echo "✓ Signatures created successfully"
+
+        # Verify we can verify with the public key
+        gpg --verify repo/dists/stable/Release.gpg repo/dists/stable/Release
+        echo "✓ Signature verification successful"
 
       shell: bash
 
