@@ -184,54 +184,19 @@ runs:
       if: runner.os == 'macOS'
       run: |
         mkdir -p dist
-
-        # Detect architecture
         ARCH=$(uname -m)
-        echo "Building for macOS architecture: $ARCH"
-
-        # Create proper macOS package structure
-        PKG_ROOT="pkgroot"
-        mkdir -p "$PKG_ROOT/${{ inputs.prefix }}"
         
-        # Copy installed files to package root
-        cp -R stage/* "$PKG_ROOT/${{ inputs.prefix }}/" 2>/dev/null || true
-
-        # Create component property list file
-        cat > Distribution.xml << EOF
-        <?xml version="1.0" encoding="utf-8"?>
-        <installer-script minSpecVersion="1.000000">
-            <title>${{ inputs.name }}-${{ env.VERSION }}</title>
-            <organization>com.${{ github.repository_owner }}</organization>
-            <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
-            <options customize="never" require-scripts="false"/>
-            <pkg-ref id="com.${{ github.repository_owner }}.${{ inputs.name }}"/>
-            <choices-outline>
-                <line choice="default">
-                    <line choice="com.${{ github.repository_owner }}.${{ inputs.name }}"/>
-                </line>
-            </choices-outline>
-            <choice id="default"/>
-            <choice id="com.${{ github.repository_owner }}.${{ inputs.name }}" visible="false">
-                <pkg-ref id="com.${{ github.repository_owner }}.${{ inputs.name }}"/>
-            </choice>
-            <pkg-ref id="com.${{ github.repository_owner }}.${{ inputs.name }}" version="${{ env.VERSION }}" onConclusion="none">${{ inputs.name }}-${{ env.VERSION }}-$ARCH.pkg</pkg-ref>
-        </installer-script>
-        EOF
-
-        # Create package using pkgbuild and productbuild
-        pkgbuild --root "$PKG_ROOT" \
+        # 1. Create honest architecture-specific tarball
+        tar czf "dist/${{ inputs.name }}-${{ env.VERSION }}-macos-$ARCH.tar.gz" -C stage .
+        
+        # 2. Optional: Simple component package
+        pkgbuild --root stage \
                  --identifier "com.${{ github.repository_owner }}.${{ inputs.name }}" \
                  --version "${{ env.VERSION }}" \
                  --install-location "${{ inputs.prefix }}" \
-                 "${{ inputs.name }}-${{ env.VERSION }}-$ARCH.pkg"
-
-        # Also create a tarball for direct installation
-        tar czf "${{ inputs.name }}-${{ env.VERSION }}-macos-$ARCH.tar.gz" -C stage .
-
-        # Move all artifacts to dist
-        mv *.pkg *.tar.gz dist/
-
-        echo "macOS packaging complete. Contents:"
+                 "dist/${{ inputs.name }}-${{ env.VERSION }}-$ARCH.pkg"
+        
+        echo "macOS packages created:"
         ls -la dist/
       shell: bash
 
@@ -242,9 +207,28 @@ runs:
         mkdir dist
         Compress-Archive -Path stage\* -DestinationPath dist\${{ inputs.name }}-${{ env.VERSION }}-win.zip
 
+    - name: Capture build info
+      run: |
+        echo "COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+        echo "COMMIT_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+        echo "BUILD_DATE=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV
+
+        # Create build info file
+        cat > BUILD_INFO << EOF
+        Package: ${{ inputs.name }}
+        Version: ${{ env.VERSION }}
+        Commit: $(git rev-parse HEAD)
+        CommitShort: $(git rev-parse --short HEAD)
+        BuildDate: $(date -u +%Y-%m-%d)
+        BuildOS: ${{ runner.os }}
+        EOF
+      shell: bash
+
     - name: Generate checksums
       run: |
         cd dist
+        # Include BUILD_INFO in checksums
+        cp ../BUILD_INFO .
         find . -type f -name "*" | xargs shasum -a 256 > SHA256SUMS
         echo "Generated checksums:"
         cat SHA256SUMS

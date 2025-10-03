@@ -63,3 +63,16 @@ Then it's just:
 ```sh
 sudo pacman -S ttypt/<package-name>
 ```
+
+## macos
+
+### Manual installation
+```sh
+tar xzf <package>-<version>-macos-arm64.tar.gz
+sudo cp -r stage/* /usr/local/
+```
+
+### Package installation  
+```sh
+sudo installer -pkg <package>-<version>-arm64.pkg -target /
+```
