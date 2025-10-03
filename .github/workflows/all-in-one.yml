@@ -16,6 +16,11 @@ on:
         required: false
         default: "ubuntu-latest"
         type: string
+      publish_to:
+        description: "Package managers to publish to (apt,apk or both)"
+        required: false
+        default: "apt,apk"
+        type: string
     secrets:
       HOST:
         required: true
@@ -65,9 +70,21 @@ jobs:
           name: ${{ inputs.name }}-Linux
           path: dist
 
-      - uses: tty-pt/ci/publish@main
+      - uses: tty-pt/ci/publish-apt@main
+        if: ${{ contains(inputs.publish_to, 'apt') }}
         with:
           source: dist/*.deb
+          host: ${{ secrets.HOST }}
+          user: ${{ secrets.USER }}
+          ssh_key: ${{ secrets.SSH_KEY }}
+          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+          gpg_keyid: ${{ secrets.GPG_KEYID }}
+
+      - uses: tty-pt/ci/publish-apk@main
+        if: ${{ contains(inputs.publish_to, 'apk') }}
+        with:
+          source: dist/*.apk
           host: ${{ secrets.HOST }}
           user: ${{ secrets.USER }}
           ssh_key: ${{ secrets.SSH_KEY }}

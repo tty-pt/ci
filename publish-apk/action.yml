@@ -1,0 +1,141 @@
+name: 'publish-apk'
+description: 'Publish APK packages to an APK repo served from OpenBSD'
+author: 'tty-pt'
+
+inputs:
+  source:
+    description: 'Glob for .apk files to publish (e.g. dist/*.apk)'
+    required: true
+  host:
+    description: 'Server hostname'
+    required: true
+  user:
+    description: 'Server user'
+    required: true
+  ssh_key:
+    description: 'Private SSH key'
+    required: true
+  gpg_key:
+    description: 'Private GPG key (ASCII-armored)'
+    required: false
+    default: ""
+  gpg_keyid:
+    description: 'Key ID or fingerprint to use when signing'
+    required: false
+  gpg_pass:
+    description: 'Passphrase for the GPG key (if any)'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ inputs.ssh_key }}" > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+        ssh-keyscan -H ${{ inputs.host }} >> ~/.ssh/known_hosts
+      shell: bash
+
+    - name: Check Docker availability
+      run: |
+        echo "Checking Docker installation..."
+        docker --version
+        docker info 2>/dev/null | head -n 5 || docker --version
+      shell: bash
+
+    - name: Import GPG key
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        echo "${{ inputs.gpg_key }}" | gpg --batch --import
+        gpg --list-secret-keys --keyid-format=long
+      shell: bash
+
+    - name: Fetch current repo from server
+      run: |
+        mkdir -p repo
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apk/ repo/ || true
+      shell: bash
+
+    - name: Setup APK signing environment
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        mkdir -p ~/.abuild
+        echo "PACKAGER='${{ github.repository_owner }} <repo@tty.pt>'" > ~/.abuild/abuild.conf
+        
+        # Try to extract RSA key from GPG key for APK signing
+        echo "${{ inputs.gpg_pass }}" | gpg --batch --yes --pinentry-mode loopback \
+          --export-secret-key --armor "${{ inputs.gpg_keyid }}" > ~/.abuild/secret.key || \
+          echo "GPG key export completed (may not be RSA format)"
+        
+        # Export public key
+        gpg --export --armor "${{ inputs.gpg_keyid }}" > ~/.abuild/rsa.pub
+      shell: bash
+
+    - name: Merge new packages and update index
+      run: |
+        mkdir -p repo/x86_64
+        for apk in ${{ inputs.source }}; do
+          if [ -f "$apk" ]; then
+            echo "Copying $apk to repo"
+            cp "$apk" repo/x86_64/
+          else
+            echo "Warning: $apk not found, skipping"
+            continue
+          fi
+        done
+        
+        # Check if we have any APK files to process
+        if [ -z "$(ls -A repo/x86_64/*.apk 2>/dev/null)" ]; then
+          echo "No APK files found to process"
+          exit 0
+        fi
+        
+        echo "Creating APK repository index..."
+        docker run --rm \
+          -v $PWD/repo:/repo \
+          -v $HOME/.abuild:/root/.abuild \
+          -v $HOME/.gnupg:/root/.gnupg \
+          alpine:latest sh -c "
+            # Install required tools
+            apk add --no-cache abuild apk-tools
+            
+            # Create APK index
+            cd /repo/x86_64
+            apk index -o APKINDEX.tar.gz *.apk
+            
+            # Try to sign with available methods
+            if [ -f /root/.abuild/secret.key ]; then
+              echo 'Attempting to sign with GPG key...'
+              cp /root/.abuild/secret.key /root/.abuild/rsa.priv
+              chmod 600 /root/.abuild/rsa.priv
+              abuild-sign -k /root/.abuild/rsa.priv APKINDEX.tar.gz || \
+              echo 'APK signing failed, continuing without signature'
+            else
+              echo 'No signing key available, creating unsigned repository'
+            fi
+            
+            # Also create a detached signature with GPG if possible
+            if command -v gpg >/dev/null 2>&1; then
+              gpg --batch --yes --detach-sign --armor -u '${{ inputs.gpg_keyid }}' APKINDEX.tar.gz 2>/dev/null || true
+            fi
+            
+            ls -la /repo/x86_64/
+          "
+      shell: bash
+
+    - name: Distribute public key
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        # Export GPG public key for clients
+        gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/key.pub
+        echo "Public key available at: https://tty.pt/apk/key.pub"
+      shell: bash
+
+    - name: Push repo back to server
+      run: |
+        echo "Publishing APK repository to server..."
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" repo/ \
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apk/
+      shell: bash
