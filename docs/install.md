@@ -64,6 +64,28 @@ Then it's just:
 sudo pacman -S ttypt/<package-name>
 ```
 
+### rpm (Fedora, Red Hat, etc)
+At least once in your life you need to:
+```sh
+# Download the repository configuration
+curl -O https://tty.pt/rpm/ttypt.repo
+
+# Install the repository configuration
+sudo mv ttypt.repo /etc/yum.repos.d/
+
+# Update package cache
+sudo dnf update  # For Fedora/RHEL 8+
+# OR
+sudo yum update  # For CentOS 7/RHEL 7
+```
+
+Then it's just:
+```sh
+sudo dnf install <package>
+# OR
+sudo yum install <package>
+```
+
 ## macos
 
 ### Manual installation

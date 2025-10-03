@@ -18,7 +18,7 @@ inputs:
   publish_to:
     description: "Package managers to publish to"
     required: false
-    default: "apt,apk,pacman,macos"
+    default: "apt,apk,pacman,rpm,macos"
     type: string
 
 runs:
@@ -179,6 +179,7 @@ runs:
 
         # Build RPM to rpm/ directory
         if [[ " ${{ inputs.publish_to }} " == *"rpm"* ]]; then
+          echo "Building RPM package..."
           fpm -s dir -t rpm -n ${{ inputs.name }} -v ${{ env.VERSION }} \
               -C stage \
               --license "$LICENSE" \
@@ -191,9 +192,6 @@ runs:
               $DEPENDS_OPTS
           mv *.rpm dist-linux/rpm/ 2>/dev/null || true
         fi
-        
-        echo "Linux package distribution:"
-        find dist-linux -type f | sort
       shell: bash
 
     - name: Package macOS

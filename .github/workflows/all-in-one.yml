@@ -19,7 +19,12 @@ on:
       publish_to:
         description: "Package managers to publish to"
         required: false
-        default: "apt,apk,pacman,macos"
+        default: "apt,apk,pacman,rpm,macos"
+        type: string
+      repo_name:
+        description: "Repository name for pacman and RPM"
+        required: false
+        default: "ttypt"
         type: string
     secrets:
       HOST:
@@ -171,6 +176,20 @@ jobs:
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
           gpg_keyid: ${{ secrets.GPG_KEYID }}
+          repo_name: ${{ inputs.repo_name }}
+
+      - name: Publish to RPM
+        if: contains(inputs.publish_to, 'rpm') && steps.artifacts.outputs.linux_built == 'true'
+        uses: tty-pt/ci/publish-rpm@main
+        with:
+          source: dist-linux/rpm/*.rpm
+          host: ${{ secrets.HOST }}
+          user: ${{ secrets.USER }}
+          ssh_key: ${{ secrets.SSH_KEY }}
+          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+          gpg_keyid: ${{ secrets.GPG_KEYID }}
+          repo_name: ${{ inputs.repo_name }}
 
       - name: Publish to macOS
         if: contains(inputs.publish_to, 'macos') && steps.artifacts.outputs.macos_built == 'true'
