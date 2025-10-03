@@ -53,9 +53,9 @@ runs:
 
     - name: Fetch current repo from server
       run: |
-        mkdir -p repo
+        mkdir -p apk-repo  # Isolated directory for APK only
         rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apk/ repo/ || true
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apk/ apk-repo/ || true
       shell: bash
 
     - name: Setup APK signing environment
@@ -75,18 +75,15 @@ runs:
 
     - name: Merge new packages and update index
       run: |
-        mkdir -p repo/x86_64
-        
-        # Only copy .apk files
+        mkdir -p apk-repo/x86_64
         for apk in ${{ inputs.source }}; do
           if [ -f "$apk" ] && [[ "$apk" == *.apk ]]; then
-            echo "Copying APK: $(basename "$apk")"
-            cp "$apk" repo/x86_64/
+            cp "$apk" apk-repo/x86_64/
           fi
         done
         
         # Check if we have any APK files to process
-        APK_COUNT=$(ls repo/x86_64/*.apk 2>/dev/null | wc -l)
+        APK_COUNT=$(ls apk-repo/x86_64/*.apk 2>/dev/null | wc -l)
         if [ "$APK_COUNT" -eq 0 ]; then
           echo "No APK files found to process"
           exit 0
@@ -94,7 +91,7 @@ runs:
         
         echo "Creating APK repository index..."
         docker run --rm \
-          -v $PWD/repo:/repo \
+          -v $PWD/apk-repo:/apk-repo \
           -v $HOME/.abuild:/root/.abuild \
           -v $HOME/.gnupg:/root/.gnupg \
           alpine:latest sh -c "
@@ -102,7 +99,7 @@ runs:
             apk add --no-cache abuild apk-tools
             
             # Create APK index
-            cd /repo/x86_64
+            cd /apk-repo/x86_64
             apk index -o APKINDEX.tar.gz *.apk
             
             # Try to sign with available methods
@@ -121,7 +118,7 @@ runs:
               gpg --batch --yes --detach-sign --armor -u '${{ inputs.gpg_keyid }}' APKINDEX.tar.gz 2>/dev/null || true
             fi
             
-            ls -la /repo/x86_64/
+            ls -la /apk-repo/x86_64/
           "
       shell: bash
 
@@ -129,13 +126,13 @@ runs:
       if: ${{ inputs.gpg_key != '' }}
       run: |
         # Export GPG public key for clients
-        gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/key.pub
+        gpg --export --armor "${{ inputs.gpg_keyid }}" > apk-repo/key.pub
         echo "Public key available at: https://tty.pt/apk/key.pub"
       shell: bash
 
     - name: Push repo back to server
       run: |
         echo "Publishing APK repository to server..."
-        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" repo/ \
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" apk-repo/ \
           ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apk/
       shell: bash

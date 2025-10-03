@@ -46,6 +46,7 @@ jobs:
         with:
           name: ${{ inputs.name }}
           deps: ${{ inputs.deps }}
+          publish_to: ${{ inputs.publish_to }}
 
   release:
     runs-on: ubuntu-latest
@@ -139,7 +140,7 @@ jobs:
         if: contains(inputs.publish_to, 'apt') && steps.artifacts.outputs.linux_built == 'true'
         uses: tty-pt/ci/publish-apt@main
         with:
-          source: dist-linux/*.deb
+          source: dist-linux/deb/*.deb
           host: ${{ secrets.HOST }}
           user: ${{ secrets.USER }}
           ssh_key: ${{ secrets.SSH_KEY }}
@@ -151,7 +152,7 @@ jobs:
         if: contains(inputs.publish_to, 'apk') && steps.artifacts.outputs.linux_built == 'true'
         uses: tty-pt/ci/publish-apk@main
         with:
-          source: dist-linux/*.apk
+          source: dist-linux/apk/*.apk
           host: ${{ secrets.HOST }}
           user: ${{ secrets.USER }}
           ssh_key: ${{ secrets.SSH_KEY }}
@@ -163,7 +164,7 @@ jobs:
         if: contains(inputs.publish_to, 'pacman') && steps.artifacts.outputs.linux_built == 'true'
         uses: tty-pt/ci/publish-pacman@main
         with:
-          source: dist-linux/*.pkg.tar.*
+          source: dist-linux/pacman/*.pkg.tar.*
           host: ${{ secrets.HOST }}
           user: ${{ secrets.USER }}
           ssh_key: ${{ secrets.SSH_KEY }}

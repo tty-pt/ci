@@ -15,6 +15,11 @@ inputs:
   prefix:
     description: 'Install prefix (default /usr/local)'
     default: '/usr/local'
+  publish_to:
+    description: "Package managers to publish to"
+    required: false
+    default: "apt,apk,pacman,macos"
+    type: string
 
 runs:
   using: 'composite'
@@ -92,7 +97,10 @@ runs:
     - name: Package Linux
       if: runner.os == 'Linux'
       run: |
-        mkdir -p dist
+        # Create separate directories for each package type
+        mkdir -p dist/deb dist/apk dist/pacman
+        
+        # Common FPM options (same as before)
         DEPENDS_OPTS=""
         if [ -n "${{ inputs.deps }}" ]; then
           for dep in $(echo "${{ inputs.deps }}" | tr ',' ' '); do
@@ -109,11 +117,9 @@ runs:
           DESC="C library ${{ inputs.name }}"
         fi
 
-        # Detect architecture from built binaries
+        # Detect architecture
         ARCH="amd64"
-        # Look for binaries in stage directory to determine actual architecture
         if find stage -type f -executable | grep -q .; then
-          # We have binaries, check their architecture
           BINARY=$(find stage -type f -executable | head -1)
           if file "$BINARY" | grep -q "ARM"; then
             ARCH="arm64"
@@ -122,62 +128,73 @@ runs:
           elif file "$BINARY" | grep -q "80386"; then
             ARCH="x86"
           fi
-        else
-          # No binaries found, this might be a header-only or architecture-independent library
-          echo "No binaries found, this appears to be an architecture-independent package"
         fi
 
         echo "Detected architecture: $ARCH"
 
-        # Build packages
-        fpm -s dir -t deb -n ${{ inputs.name }} -v ${{ env.VERSION }} \
-            -C stage \
-            --license "$LICENSE" \
-            --vendor "$VENDOR" \
-            --maintainer "$MAINTAINER" \
-            --url "$HOMEPAGE" \
-            --description "$DESC" \
-            --category "devel" \
-            --architecture "$ARCH" \
-            $DEPENDS_OPTS
+        # Build DEB to deb/ directory
+        if [[ " ${{ inputs.publish_to }} " == *"apt"* ]]; then
+          fpm -s dir -t deb -n ${{ inputs.name }} -v ${{ env.VERSION }} \
+              -C stage \
+              --license "$LICENSE" \
+              --vendor "$VENDOR" \
+              --maintainer "$MAINTAINER" \
+              --url "$HOMEPAGE" \
+              --description "$DESC" \
+              --category "devel" \
+              --architecture "$ARCH" \
+              $DEPENDS_OPTS
+          mv *.deb dist/deb/ 2>/dev/null || true
+        fi
 
-        # Build RPM package
-        fpm -s dir -t rpm -n ${{ inputs.name }} -v ${{ env.VERSION }} \
-            -C stage \
-            --license "$LICENSE" \
-            --vendor "$VENDOR" \
-            --maintainer "$MAINTAINER" \
-            --url "$HOMEPAGE" \
-            --description "$DESC" \
-            --category "devel" \
-            --architecture "$ARCH" \
-            $DEPENDS_OPTS
+        # Build APK to apk/ directory
+        if [[ " ${{ inputs.publish_to }} " == *"apk"* ]]; then
+          fpm -s dir -t apk -n ${{ inputs.name }} -v ${{ env.VERSION }} \
+              -C stage \
+              --license "$LICENSE" \
+              --vendor "$VENDOR" \
+              --maintainer "$MAINTAINER" \
+              --url "$HOMEPAGE" \
+              --description "$DESC" \
+              --category "devel" \
+              --architecture "$ARCH" \
+              $DEPENDS_OPTS
+          mv *.apk dist/apk/ 2>/dev/null || true
+        fi
 
-        # Build APK package
-        fpm -s dir -t apk -n ${{ inputs.name }} -v ${{ env.VERSION }} \
-            -C stage \
-            --license "$LICENSE" \
-            --vendor "$VENDOR" \
-            --maintainer "$MAINTAINER" \
-            --url "$HOMEPAGE" \
-            --description "$DESC" \
-            --category "devel" \
-            --architecture "$ARCH" \
-            $DEPENDS_OPTS
+        # Build Pacman to pacman/ directory
+        if [[ " ${{ inputs.publish_to }} " == *"pacman"* ]]; then
+          fpm -s dir -t pacman -n ${{ inputs.name }} -v ${{ env.VERSION }} \
+              -C stage \
+              --license "$LICENSE" \
+              --vendor "$VENDOR" \
+              --maintainer "$MAINTAINER" \
+              --url "$HOMEPAGE" \
+              --description "$DESC" \
+              --category "devel" \
+              --architecture "$ARCH" \
+              $DEPENDS_OPTS || echo "Pacman package build failed"
+          mv *.pkg.tar.* dist/pacman/ 2>/dev/null || true
+        fi
 
-        # Build Pacman package
-        fpm -s dir -t pacman -n ${{ inputs.name }} -v ${{ env.VERSION }} \
-            -C stage \
-            --license "$LICENSE" \
-            --vendor "$VENDOR" \
-            --maintainer "$MAINTAINER" \
-            --url "$HOMEPAGE" \
-            --description "$DESC" \
-            --category "devel" \
-            --architecture "$ARCH" \
-            $DEPENDS_OPTS || echo "Pacman package build failed"
+        # Build RPM to rpm/ directory (if you want it)
+        if [[ " ${{ inputs.publish_to }} " == *"rpm"* ]]; then
+          fpm -s dir -t rpm -n ${{ inputs.name }} -v ${{ env.VERSION }} \
+              -C stage \
+              --license "$LICENSE" \
+              --vendor "$VENDOR" \
+              --maintainer "$MAINTAINER" \
+              --url "$HOMEPAGE" \
+              --description "$DESC" \
+              --category "devel" \
+              --architecture "$ARCH" \
+              $DEPENDS_OPTS
 
-        mv *.deb *.rpm *.apk *.pkg.tar.* dist/ 2>/dev/null || true
+          mv *.rpm dist/rpm/ 2>/dev/null || true
+        fi
+        
+        echo "Package distribution:"
+        find dist -type f | sort
       shell: bash
 
     - name: Package macOS

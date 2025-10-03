@@ -50,9 +50,9 @@ runs:
 
     - name: Fetch current repo from server
       run: |
-        mkdir -p repo
+        mkdir -p pacman-repo
         rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/pacman/ repo/ || true
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/pacman/ pacman-repo/ || true
       shell: bash
 
     - name: Install pacman tools via Docker
@@ -62,18 +62,18 @@ runs:
 
     - name: Merge new packages and update database
       run: |
-        mkdir -p repo/x86_64
+        mkdir -p pacman-repo/x86_64
         
         # Only copy .pkg.tar.* files
         for pkg in ${{ inputs.source }}; do
           if [ -f "$pkg" ] && [[ "$pkg" == *.pkg.tar.* ]]; then
             echo "Copying Pacman package: $(basename "$pkg")"
-            cp "$pkg" repo/x86_64/
+            cp "$pkg" pacman-repo/x86_64/
           fi
         done
         
         # Check if we have any packages to process
-        PKG_COUNT=$(ls repo/x86_64/*.pkg.tar.* 2>/dev/null | wc -l)
+        PKG_COUNT=$(ls pacman-repo/x86_64/*.pkg.tar.* 2>/dev/null | wc -l)
         if [ "$PKG_COUNT" -eq 0 ]; then
           echo "No Pacman packages found to process"
           exit 0
@@ -81,14 +81,14 @@ runs:
         
         echo "Updating Pacman repository database..."
         docker run --rm \
-          -v $PWD/repo:/repo \
+          -v $PWD/pacman-repo:/pacman-repo \
           -v $HOME/.gnupg:/root/.gnupg \
           archlinux:latest sh -c "
             # Update and install required tools
             pacman -Syu --noconfirm pacman-contrib
             
             # Create or update repository database
-            cd /repo/x86_64
+            cd /pacman-repo/x86_64
             
             # Initialize database if it doesn't exist
             if [ ! -f ${{ inputs.repo_name }}.db.tar.gz ]; then
@@ -104,21 +104,21 @@ runs:
             ln -sf ${{ inputs.repo_name }}.files.tar.gz ${{ inputs.repo_name }}.files
             
             echo 'Repository contents:'
-            ls -la /repo/x86_64/
+            ls -la /pacman-repo/x86_64/
           "
       shell: bash
 
     - name: Create repository configuration
       run: |
-        mkdir -p repo
-        cat > repo/${{ inputs.repo_name }}.conf << EOF
+        mkdir -p pacman-repo
+        cat > pacman-repo/${{ inputs.repo_name }}.conf << EOF
         [{{ inputs.repo_name }}]
         SigLevel = Optional TrustAll
         Server = https://tty.pt/pacman/\$arch
         EOF
         
         # Also create a standalone database file for older pacman versions
-        cd repo/x86_64
+        cd pacman-repo/x86_64
         if [ -f ${{ inputs.repo_name }}.db.tar.gz ]; then
           tar -xzf ${{ inputs.repo_name }}.db.tar.gz
           # This creates a plain ${{ inputs.repo_name }}.db file that some clients expect
@@ -129,14 +129,14 @@ runs:
       if: ${{ inputs.gpg_key != '' }}
       run: |
         # Export GPG public key for clients
-        gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/key.pub
+        gpg --export --armor "${{ inputs.gpg_keyid }}" > pacman-repo/key.pub
         echo "Public key available at: https://tty.pt/pacman/key.pub"
       shell: bash
 
     - name: Push repo back to server
       run: |
         echo "Publishing Pacman repository to server..."
-        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" repo/ \
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" pacman-repo/ \
           ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/pacman/
         
         echo "Pacman repository published successfully!"
