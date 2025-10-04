@@ -60,6 +60,18 @@ runs:
         echo "${{ inputs.gpg_key }}" | gpg --batch --import
       shell: bash
 
+    - name: Sign built RPM packages
+      if: ${{ inputs.gpg_key != '' && env.SKIP_PUBLISH != 'true' }}
+      run: |
+        echo "%_gpg_name ${{ inputs.gpg_keyid }}" > ~/.rpmmacros
+
+        shopt -s nullglob
+        for rpm in ${{ inputs.source }}; do
+          echo "Signing $rpm..."
+          rpm --addsign "$rpm"
+        done
+      shell: bash
+
     - name: Fetch current repo from server
       if: env.SKIP_PUBLISH != 'true'
       run: |

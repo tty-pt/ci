@@ -1,0 +1,26 @@
+name: 'itest-rpm'
+description: 'Test RPM package installation on Rocky Linux'
+author: 'tty-pt'
+
+inputs:
+  name:
+    description: 'Package name'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Test RPM installation
+      run: |
+        # Download the repository configuration
+        curl -O https://tty.pt/rpm/ttypt.repo
+
+        # Install the repository configuration
+        mv ttypt.repo /etc/yum.repos.d/
+
+        # Update package cache
+        dnf makecache
+
+        # This runs in Rocky Linux container
+        dnf install -y ${{ inputs.name }}
+      shell: bash

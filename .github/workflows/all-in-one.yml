@@ -202,3 +202,59 @@ jobs:
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
           gpg_keyid: ${{ secrets.GPG_KEYID }}
+  package-rpm:
+    if: contains(inputs.publish_to, 'rpm')
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+    steps:
+    - name: Package RPM
+      uses: tty-pt/ci/package-rpm@main
+      with:
+        name: ${{ inputs.name }}
+        deps: ${{ inputs.deps }}
+        gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+        gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+        gpg_keyid: ${{ secrets.GPG_KEYID }}
+
+  package-pacman:
+    if: contains(inputs.publish_to, 'pacman')
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+    - name: Package pacman
+      uses: tty-pt/ci/package-pacman@main
+      with:
+        name: ${{ inputs.name }}
+        deps: ${{ inputs.deps }}
+        gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+        gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+        gpg_keyid: ${{ secrets.GPG_KEYID }}
+
+  package-apk:
+    if: contains(inputs.publish_to, 'apk')
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:latest
+    steps:
+    - name: Package APK
+      uses: tty-pt/ci/package-apk@main
+      with:
+        name: ${{ inputs.name }}
+        deps: ${{ inputs.deps }}
+        gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+        gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+        gpg_keyid: ${{ secrets.GPG_KEYID }}
+
+  itest-rpm:
+    if: contains(inputs.publish_to, 'rpm')
+    needs: publish
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+    steps:
+    - name: Test install
+      uses: tty-pt/ci/itest-rpm@main
+      with:
+        name: ${{ inputs.name }}
