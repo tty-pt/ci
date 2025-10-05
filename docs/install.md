@@ -74,7 +74,7 @@ curl -O https://tty.pt/rpm/ttypt.repo
 sudo mv ttypt.repo /etc/yum.repos.d/
 
 # Update package cache
-sudo dnf update  # For Fedora/RHEL 8+
+sudo dnf check-update  # For Fedora/RHEL 8+
 # OR
 sudo yum update  # For CentOS 7/RHEL 7
 ```

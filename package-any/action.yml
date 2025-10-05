@@ -14,8 +14,24 @@ inputs:
     required: false
     default: ''
   deps:
-    description: 'Comma-separated list of runtime dependencies'
+    description: 'Generic dependencies'
     required: false
+  deps_deb:
+    description: 'Debian/Ubuntu dependency names'
+    required: false
+    default: ''
+  deps_rpm:
+    description: 'Fedora/RHEL dependency names'
+    required: false
+    default: ''
+  deps_apk:
+    description: 'Alpine dependency names'
+    required: false
+    default: ''
+  deps_pacman:
+    description: 'Arch dependency names'
+    required: false
+    default: ''
   abuild_key:
     description: 'ABUILD key'
     required: false
@@ -42,19 +58,69 @@ runs:
   steps:
     - uses: actions/checkout@v4
 
+    - name: Add Repo (APK)
+      if: inputs.format == 'apk'
+      run: |
+        echo "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main" > /etc/apk/repositories
+        echo "https://dl-cdn.alpinelinux.org/alpine/latest-stable/community" >> /etc/apk/repositories
+        echo "http://tty.pt/apk" >> /etc/apk/repositories
+
+        # Trust tty.pt key to silence 'UNTRUSTED signature'
+        mkdir -p /etc/apk/keys
+        wget -O /etc/apk/keys/ttypt.rsa.pub https://tty.pt/apk/keys/ttypt.rsa.pub
+        chmod 644 /etc/apk/keys/ttypt.rsa.pub
+
+        apk update
+      shell: sh
+
+    - name: Add Repo (PACMAN)
+      if: inputs.format == 'pacman'
+      shell: sh
+      run: |
+        REPO_NAME="ttypt"
+        REPO_CONF="/etc/pacman.conf"
+        if ! grep -q "^\[${REPO_NAME}\]" "$REPO_CONF"; then
+          {
+            echo ""
+            echo "[${REPO_NAME}]"
+            echo "SigLevel = Never"
+            echo "Server = https://tty.pt/pacman/\$arch"
+          } | tee -a "$REPO_CONF"
+          echo "✓ Added custom $REPO_NAME repo to pacman.conf"
+        fi
+        pacman -Sy --noconfirm || true
+
+    - name: Add Repo (APT)
+      if: inputs.format == 'deb'
+      run: |
+        echo "deb [trusted=yes] http://tty.pt/apt stable main" | sudo tee /etc/apt/sources.list.d/ttypt.list
+        sudo apt-get update -y
+      shell: sh
+
+    - name: Add Repo (RPM)
+      if: inputs.format == 'rpm'
+      run: |
+        dnf install -y dnf-plugins-core || true
+        dnf config-manager --set-enabled crb || true
+        dnf install -y epel-release || true
+        curl -o /etc/yum.repos.d/ttypt.repo https://tty.pt/rpm/ttypt.repo
+        dnf makecache -y
+        dnf repolist
+      shell: sh
 
     - name: Install prerequisites (APK)
-      if: ${{ inputs.format == 'apk' }}
+      if: inputs.format == 'apk'
       run: |
         apk add --no-cache alpine-sdk abuild git tar gzip fakeroot gnupg shadow
-        if [ -n "${{ inputs.deps }}" ]; then
-          apk add --no-cache $(echo "${{ inputs.deps }}" | tr ',' ' ')
+        deps="${{ inputs.deps_apk || inputs.deps }}"
+        if [ -n "$deps" ]; then
+          echo apk add --no-cache $(echo "$deps" | tr ',' ' ')
+          apk add --no-cache $(echo "$deps" | tr ',' ' ')
         fi
       shell: sh
 
     - name: Install build deps (Linux)
-      if: inputs.deps && runner.os == 'Linux'
-        && inputs.format == 'deb'
+      if: inputs.format == 'deb'
       run: |
         echo "deb [trusted=yes] http://tty.pt/apt stable main" | sudo tee /etc/apt/sources.list.d/ttypt.list
         sudo apt-get update -y
@@ -65,18 +131,19 @@ runs:
       run: |
         sudo rm -f /var/lib/man-db/auto-update
         sudo apt-get install -y dpkg-dev fakeroot gnupg git
-        if [ -n "${{ inputs.deps }}" ]; then
-          sudo apt-get install -y $(echo "${{ inputs.deps }}" | tr ',' ' ')
+        deps="${{ inputs.deps_deb || inputs.deps }}"
+        if [ -n "$deps" ]; then
+          sudo apt-get install -y $(echo "$deps" | tr ',' ' ')
         fi
       shell: sh
 
-    # --- Fedora/CentOS/RHEL ---
     - name: Install prerequisites (RPM)
       if: ${{ inputs.format == 'rpm' }}
       run: |
         dnf install -y git make gcc rpm-build rpm-sign
-        if [ -n "${{ inputs.deps }}" ]; then
-          for dep in $(echo "${{ inputs.deps }}" | tr ',' ' '); do
+        deps="${{ inputs.deps_rpm || inputs.deps }}"
+        if [ -n "$deps" ]; then
+          for dep in $(echo "$deps" | tr ',' ' '); do
             dnf install -y "$dep"
           done
         fi
@@ -86,8 +153,9 @@ runs:
       if: ${{ inputs.format == 'pacman' }}
       run: |
         pacman -Sy --noconfirm base-devel git tar gzip zstd
-        if [ -n "${{ inputs.deps }}" ]; then
-          pacman -S --noconfirm $(echo "${{ inputs.deps }}" | tr ',' ' ')
+        deps="${{ inputs.deps_pacman || inputs.deps }}"
+        if [ -n "$deps" ]; then
+          pacman -S --noconfirm $(echo "$deps" | tr ',' ' ')
         fi
       shell: sh
 
@@ -151,8 +219,9 @@ runs:
           echo "url=\"https://github.com/${{ github.repository }}\""
           echo "license=('MIT')"
 
-          if [ -n "${{ inputs.deps }}" ]; then
-            echo "depends=($(echo \"${{ inputs.deps }}\" | tr ',' ' '))"
+          deps="${{ inputs.deps_pacman || inputs.deps }}"
+          if [ -n "$deps" ]; then
+            echo "depends=($(echo $deps | tr ',' ' '))"
           fi
 
           echo "source=()"
@@ -192,8 +261,9 @@ runs:
           echo "url=\"https://github.com/${{ github.repository }}\""
           echo "license=('MIT')"
 
-          if [ -n "${{ inputs.deps }}" ]; then
-            echo "depends=($(echo \"${{ inputs.deps }}\" | tr ',' ' '))"
+          deps="${{ inputs.deps_pacman || inputs.deps }}"
+          if [ -n "$deps" ]; then
+            echo "depends=($(echo $deps | tr ',' ' '))"
           fi
 
           echo "source=()"
@@ -243,8 +313,9 @@ runs:
           echo "arch=\"$(uname -m)\""
           echo "license=\"MIT\""
           echo "maintainer=\"tty.pt repo <repo@tty.pt>\""
-          if [ -n "${{ inputs.deps }}" ]; then
-            echo "depends=\"$(echo \"${{ inputs.deps }}\" | tr ',' ' ')\""
+          deps="${{ inputs.deps_apk || inputs.deps }}"
+          if [ -n "$deps" ]; then
+            echo "depends=\"$(echo $deps | tr ',' ' ')\""
           fi
           echo "source=\"\""
           echo "options=\"!check\""
@@ -268,9 +339,9 @@ runs:
         
         su builder -c '
           cd "$PWD"
-          echo "Running abuild without signing..."
-          # Force unsigned build
-          abuild -rF -k
+          echo "Running abuild"
+          export PACKAGER_REPOSITORY=@ttypt
+          abuild -r
           
           echo "abuild completed, checking for packages..."
           # Look for packages in multiple possible locations
@@ -327,22 +398,34 @@ runs:
         echo "URL:            $REPO_URL"                     >> $SPEC
         echo "Source0:        %{name}-%{version}.tar.gz"     >> $SPEC
         echo "BuildArch: $(uname -m)"                        >> $SPEC
-        echo ""                                              >> $SPEC
+        deps="${{ inputs.deps_rpm || inputs.deps }}"
+        if [ -n "$deps" ]; then
+          for dep in $(echo "$deps" | tr ',' ' '); do
+            echo "Requires: $dep" >> $SPEC
+          done
+        fi
+        echo "" >> $SPEC
         echo "%description"                                  >> $SPEC
         echo "Auto-generated package for $NAME."             >> $SPEC
         echo ""                                              >> $SPEC
         echo "%prep"                                         >> $SPEC
-        echo "%setup -q"                                     >> $SPEC
+        # echo "%setup -q"                                     >> $SPEC
         echo ""                                              >> $SPEC
         echo "%build"                                        >> $SPEC
         echo "# nothing"                                     >> $SPEC
         echo ""                                              >> $SPEC
         echo "%install"                                      >> $SPEC
         echo "mkdir -p %{buildroot}$PREFIX"                 >> $SPEC
-        echo "cp -a * %{buildroot}$PREFIX/"                 >> $SPEC
+        echo "cp -a $PWD/stage/* %{buildroot}$PREFIX/"                 >> $SPEC
         echo ""                                              >> $SPEC
         echo "%files"                                        >> $SPEC
-        echo "$PREFIX/*"                                     >> $SPEC
+
+        test ! -d stage/usr/lib \
+          || echo "/usr/lib/*" >> $SPEC
+        test ! -d stage/usr/include \
+          || echo "/usr/include/*" >> $SPEC
+        test ! -d stage/usr/bin \
+          || echo "/usr/bin/*" >> $SPEC
         echo ""                                              >> $SPEC
         echo "%changelog"                                    >> $SPEC
         echo "* $DATE tty-pt <noreply@github.com> - $VERSION-1" >> $SPEC
@@ -383,10 +466,9 @@ runs:
         # Create temporary directory for packaging
         PKGDIR="${PWD}/pkg-${NAME}_${VERSION}"
         mkdir -p "$PKGDIR/DEBIAN"
-        mkdir -p "$PKGDIR$PREFIX"
 
         # Copy staged files into the package root
-        cp -a ./stage/* "$PKGDIR$PREFIX/"
+        cp -a ./stage/* "$PKGDIR/"
 
         # Generate control file
         {
@@ -397,8 +479,10 @@ runs:
           echo "Architecture: amd64"
           echo "Maintainer: tty.pt repo <repo@tty.pt>"
           echo "Description: $NAME binary package"
-          if [ -n "${{ inputs.deps }}" ]; then
-            echo "Depends: $(echo \"${{ inputs.deps }}\" | tr ',' ', ')"
+          deps="${{ inputs.deps_apk || inputs.deps }}"
+          deps_clean=$(echo "$deps" | tr -d '"' | tr ',' ', ')
+          if [ -n "$deps_clean" ]; then
+            echo "Depends: $deps_clean"
           fi
         } > "$PKGDIR/DEBIAN/control"
 
