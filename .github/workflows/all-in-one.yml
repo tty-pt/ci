@@ -19,7 +19,7 @@ on:
       publish_to:
         description: "Package managers to publish to"
         required: false
-        default: "apt,apk,pacman,rpm,macos"
+        default: "deb,apk,pacman,rpm,macos"
         type: string
       repo_name:
         description: "Repository name for pacman and RPM"
@@ -39,6 +39,10 @@ on:
         required: false
       GPG_KEYID:
         required: false
+      ABUILD_PRIVATE_KEY:
+        required: false
+      ABUILD_PUBLIC_KEY:
+        required: false
 
 jobs:
   build:
@@ -52,33 +56,6 @@ jobs:
           name: ${{ inputs.name }}
           deps: ${{ inputs.deps }}
           publish_to: ${{ inputs.publish_to }}
-
-  release:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Combine everything for release
-        run: |
-          mkdir -p release
-          # Copy ALL files from all artifacts
-          find artifacts -type f -exec cp {} release/ \; 2>/dev/null || true
-
-          # Generate one checksum file for everything
-          cd release
-          find . -type f -not -name SHA256SUMS | xargs shasum -a 256 > SHA256SUMS
-
-          echo "Release contents:"
-          ls -la
-        shell: bash
-
-      - uses: tty-pt/ci/release@main
-        with:
-          files: release/*
 
   publish:
     runs-on: ubuntu-latest
@@ -142,7 +119,7 @@ jobs:
         shell: bash
 
       - name: Publish to APT
-        if: contains(inputs.publish_to, 'apt') && steps.artifacts.outputs.linux_built == 'true'
+        if: contains(inputs.publish_to, 'deb') && steps.artifacts.outputs.linux_built == 'true'
         uses: tty-pt/ci/publish-apt@main
         with:
           source: dist-linux/deb/*.deb
@@ -202,50 +179,87 @@ jobs:
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
           gpg_keyid: ${{ secrets.GPG_KEYID }}
-  package-rpm:
-    if: contains(inputs.publish_to, 'rpm')
+
+  package-any-deb:
+    if: contains(inputs.publish_to, 'deb')
     runs-on: ubuntu-latest
     container:
-      image: rockylinux:9
+      image: ghcr.io/tty-pt/ubuntu-builder:latest
     steps:
-    - name: Package RPM
-      uses: tty-pt/ci/package-rpm@main
+    - name: Package APT
+      uses: tty-pt/ci/package-any@main
       with:
         name: ${{ inputs.name }}
+        format: 'deb'
         deps: ${{ inputs.deps }}
         gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
         gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
         gpg_keyid: ${{ secrets.GPG_KEYID }}
 
-  package-pacman:
-    if: contains(inputs.publish_to, 'pacman')
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:base-devel
-    steps:
-    - name: Package pacman
-      uses: tty-pt/ci/package-pacman@main
-      with:
-        name: ${{ inputs.name }}
-        deps: ${{ inputs.deps }}
-        gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
-        gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-        gpg_keyid: ${{ secrets.GPG_KEYID }}
-
-  package-apk:
+  package-any-apk:
     if: contains(inputs.publish_to, 'apk')
     runs-on: ubuntu-latest
     container:
-      image: alpine:latest
+      image: ghcr.io/tty-pt/alpine-builder:latest
     steps:
     - name: Package APK
-      uses: tty-pt/ci/package-apk@main
+      uses: tty-pt/ci/package-any@main
       with:
         name: ${{ inputs.name }}
+        format: 'apk'
+        deps: ${{ inputs.deps }}
+        abuild_key: ${{ secrets.ABUILD_PRIVATE_KEY }}
+        abuild_pub: ${{ secrets.ABUILD_PUBLIC_KEY }}
+
+  package-any-pacman:
+    if: contains(inputs.publish_to, 'pacman')
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/tty-pt/arch-builder:latest
+    steps:
+    - name: Package PACMAN
+      uses: tty-pt/ci/package-any@main
+      with:
+        name: ${{ inputs.name }}
+        format: 'pacman'
+        ext: 'pkg.tar.zst'
         deps: ${{ inputs.deps }}
         gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
         gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
         gpg_keyid: ${{ secrets.GPG_KEYID }}
+
+  package-any-rpm:
+    if: contains(inputs.publish_to, 'rpm')
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/tty-pt/rocky-builder:latest
+    steps:
+    - name: Package RPM
+      uses: tty-pt/ci/package-any@main
+      with:
+        name: ${{ inputs.name }}
+        format: 'rpm'
+        deps: ${{ inputs.deps }}
+        gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+        gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+        gpg_keyid: ${{ secrets.GPG_KEYID }}
+
+  release:
+    runs-on: ubuntu-latest
+    needs:
+      - package-any-pacman
+      - package-any-rpm
+      - package-any-apk
+      - package-any-deb
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release/
+      
+      - name: Create and publish GitHub Release
+        uses: tty-pt/ci/release@main
 
   itest-rpm:
     if: contains(inputs.publish_to, 'rpm')

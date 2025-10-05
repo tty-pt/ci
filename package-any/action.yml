@@ -1,0 +1,410 @@
+name: 'package-any'
+description: 'Build and sign packages'
+author: 'tty-pt'
+
+inputs:
+  name:
+    description: 'Package name'
+    required: true
+  format:
+    description: 'PM Format'
+    required: true
+  ext:
+    description: 'Output file extension for this format'
+    required: false
+    default: ''
+  deps:
+    description: 'Comma-separated list of runtime dependencies'
+    required: false
+  abuild_key:
+    description: 'ABUILD key'
+    required: false
+    default: ''
+  abuild_pub:
+    description: 'ABUILD key'
+    required: false
+    default: ''
+  gpg_key:
+    description: 'ASCII-armored private GPG key to sign the package'
+    required: false
+    default: ''
+  gpg_keyid:
+    description: 'Key ID or fingerprint for signing'
+    required: false
+    default: ''
+  gpg_pass:
+    description: 'Passphrase for the GPG key (optional)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+
+
+    - name: Install prerequisites (APK)
+      if: ${{ inputs.format == 'apk' }}
+      run: |
+        apk add --no-cache alpine-sdk abuild git tar gzip fakeroot gnupg shadow
+        if [ -n "${{ inputs.deps }}" ]; then
+          apk add --no-cache $(echo "${{ inputs.deps }}" | tr ',' ' ')
+        fi
+      shell: sh
+
+    - name: Install build deps (Linux)
+      if: inputs.deps && runner.os == 'Linux'
+        && inputs.format == 'deb'
+      run: |
+        echo "deb [trusted=yes] http://tty.pt/apt stable main" | sudo tee /etc/apt/sources.list.d/ttypt.list
+        sudo apt-get update -y
+      shell: sh
+
+    - name: Install prerequisites (DEB)
+      if: ${{ inputs.format == 'deb' }}
+      run: |
+        sudo rm -f /var/lib/man-db/auto-update
+        sudo apt-get install -y dpkg-dev fakeroot gnupg git
+        if [ -n "${{ inputs.deps }}" ]; then
+          sudo apt-get install -y $(echo "${{ inputs.deps }}" | tr ',' ' ')
+        fi
+      shell: sh
+
+    # --- Fedora/CentOS/RHEL ---
+    - name: Install prerequisites (RPM)
+      if: ${{ inputs.format == 'rpm' }}
+      run: |
+        dnf install -y git make gcc rpm-build rpm-sign
+        if [ -n "${{ inputs.deps }}" ]; then
+          for dep in $(echo "${{ inputs.deps }}" | tr ',' ' '); do
+            dnf install -y "$dep"
+          done
+        fi
+      shell: sh
+
+    - name: Install prerequisites (PACMAN)
+      if: ${{ inputs.format == 'pacman' }}
+      run: |
+        pacman -Sy --noconfirm base-devel git tar gzip zstd
+        if [ -n "${{ inputs.deps }}" ]; then
+          pacman -S --noconfirm $(echo "${{ inputs.deps }}" | tr ',' ' ')
+        fi
+      shell: sh
+
+    - name: Import GPG key (if provided)
+      if: ${{ inputs.gpg_key != '' && inputs.format != 'apk' }}
+      run: |
+        mkdir -p ~/.gnupg
+        chmod 700 ~/.gnupg
+        echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
+        echo "%_gpg_name ${{ inputs.gpg_keyid }}" > ~/.rpmmacros
+      shell: sh
+
+    - name: Import abuild key
+      if: ${{ inputs.abuild_key != '' && inputs.format == 'apk' }}
+      run: |
+        mkdir -p /home/builder/.abuild
+        echo "${{ inputs.abuild_key }}" > /home/builder/.abuild/ttypt.rsa
+        chmod 600 /home/builder/.abuild/ttypt.rsa
+
+        echo "${{ inputs.abuild_pub }}" > /home/builder/.abuild/ttypt.rsa.pub
+        chmod 644 /home/builder/.abuild/ttypt.rsa.pub
+
+        echo "PACKAGER_PRIVKEY=/home/builder/.abuild/ttypt.rsa" > /home/builder/.abuild/abuild.conf
+        echo "PACKAGER='tty.pt repo <repo@tty.pt>'" >> /home/builder/.abuild/abuild.conf
+        chown -R builder:builder /home/builder/.abuild
+      shell: sh
+
+    - name: Fetch include.mk from tty-pt/mk
+      run: |
+        git clone --branch main https://github.com/tty-pt/mk ../mk
+      shell: sh
+
+    - name: Build and stage project
+      run: |
+        make
+        make DESTDIR=$PWD/stage PREFIX=/usr install
+      shell: sh
+
+    - name: Resolve version from tag
+      id: version
+      run: |
+        VERSION="${GITHUB_REF_NAME#v}"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+      shell: sh
+
+    - name: Prepare builder user
+      if: inputs.format == 'deb'
+      run: |
+        if ! id builder >/dev/null 2>&1; then
+          sudo useradd -m builder
+        fi
+        sudo mkdir -p /home/builder
+        sudo chown -R builder:builder /home/builder
+      shell: sh
+
+    - name: Prepare builder user
+      if: inputs.format != 'deb'
+      run: |
+        if ! id builder >/dev/null 2>&1; then
+          useradd -m builder
+        fi
+        mkdir -p /home/builder
+        chown -R builder:builder /home/builder
+      shell: sh
+
+    - name: Build package (PACMAN)
+      if: ${{ inputs.format == 'pacman' }}
+      run: |
+        NAME="${{ inputs.name }}"
+        VERSION="${{ steps.version.outputs.version }}"
+        PREFIX="${{ inputs.prefix }}"
+
+        mkdir -p dist-pacman
+        chown -R builder:builder "$PWD"
+
+        {
+          echo "pkgname=$NAME"
+          echo "pkgver=$VERSION"
+          echo "pkgrel=1"
+          echo "pkgdesc=\"$NAME binary package\""
+          echo "arch=('$(uname -m)')"
+          echo "url=\"https://github.com/${{ github.repository }}\""
+          echo "license=('MIT')"
+
+          if [ -n "${{ inputs.deps }}" ]; then
+            echo "depends=($(echo \"${{ inputs.deps }}\" | tr ',' ' '))"
+          fi
+
+          echo "source=()"
+          echo "sha256sums=()"
+          echo ""
+          echo "package() {"
+          echo "  cp -a \"$PWD/stage/\"* \"\$pkgdir/\""
+          echo "}"
+        } > PKGBUILD
+
+        mkdir -p dist-pacman
+        sudo -u builder sh -c '
+          cd "$PWD"
+          makepkg -sf --noconfirm --nodeps
+          mkdir -p dist-pacman
+          mv *.pkg.tar.* dist-pacman/ || true
+        '
+        if [ -n "${{ inputs.gpg_key }}" ]; then
+          echo "Signing Pacman package..."
+          export GPG_TTY=$(tty || true)
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent
+          gpgconf --launch gpg-agent
+
+          for pkg in dist-pacman/*.pkg.tar.*; do
+            gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${{ inputs.gpg_pass }}" \
+              --detach-sign --armor -u "${{ inputs.gpg_keyid }}" "$pkg"
+          done
+        fi
+      shell: sh
+
+    - name: Build package (APK)
+      if: ${{ inputs.format == 'apk' }}
+      run: |
+        NAME="${{ inputs.name }}"
+        VERSION="${{ steps.version.outputs.version }}"
+        mkdir -p dist-apk
+
+        {
+          echo "# Maintainer: tty.pt repo <repo@tty.pt>"
+          echo "pkgname=$NAME"
+          echo "pkgver=$VERSION"
+          echo "pkgrel=1"
+          echo "pkgdesc=\"$NAME binary package\""
+          echo "url=\"https://github.com/${{ github.repository }}\""
+          echo "arch=\"$(uname -m)\""
+          echo "license=\"MIT\""
+          echo "maintainer=\"tty.pt repo <repo@tty.pt>\""
+          if [ -n "${{ inputs.deps }}" ]; then
+            echo "depends=\"$(echo \"${{ inputs.deps }}\" | tr ',' ' ')\""
+          fi
+          echo "source=\"\""
+          echo "options=\"!check\""
+          echo ""
+          echo "package() {"
+          echo "  mkdir -p \"\$pkgdir\""
+          echo "  cp -a \"$PWD/stage/\"* \"\$pkgdir/\""
+          echo "}"
+        } > APKBUILD
+        
+        chown builder:builder APKBUILD
+        echo "Generated APKBUILD:"
+        cat APKBUILD
+
+        mkdir -p dist-apk
+        chown -R builder:builder .
+        
+        su builder -c '
+          cd "$PWD"
+          echo "Running abuild without signing..."
+          # Force unsigned build
+          abuild -rF -k
+          
+          echo "abuild completed, checking for packages..."
+          # Look for packages in multiple possible locations
+          if [ -d "/home/builder/packages" ]; then
+            echo "Found packages in /home/builder/packages:"
+            find /home/builder/packages -name "*.apk" 
+            find /home/builder/packages -name "*.apk" -exec cp {} dist-apk/ \;
+          fi
+          
+          echo "Contents of dist-apk:"
+          ls -la dist-apk/ || echo "dist-apk directory is empty"
+        '
+        # Ensure the artifact is accessible to the upload step
+        chmod -R 755 dist-apk/
+        echo "Final dist-apk contents:"
+        ls -la dist-apk/
+      shell: sh
+
+    - name: Generate tarball from ./stage
+      if: ${{ inputs.format == 'rpm' }}
+      run: |
+        NAME="${{ inputs.name }}"
+        VERSION="${{ steps.version.outputs.version }}"
+        TMPDIR="/tmp/${NAME}-${VERSION}"
+        mkdir -p "$TMPDIR"
+        cp -a ./stage/* "$TMPDIR/"
+        mkdir -p ~/rpmbuild/SOURCES
+        tar czf ~/rpmbuild/SOURCES/${NAME}-${VERSION}.tar.gz -C /tmp ${NAME}-${VERSION}
+      shell: sh
+
+    - name: Prepare rpmbuild tree manually
+      if: ${{ inputs.format == 'rpm' }}
+      run: |
+        mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+        mkdir -p dist-rpm
+      shell: sh
+
+    - name: Generate .spec file
+      if: ${{ inputs.format == 'rpm' }}
+      run: |
+        NAME="${{ inputs.name }}"
+        VERSION="${{ steps.version.outputs.version }}"
+        PREFIX="${{ inputs.prefix }}"
+        REPO_URL="https://github.com/${{ github.repository }}"
+        DATE="$(date "+%a %b %d %Y")"
+
+        SPEC=~/rpmbuild/SPECS/${NAME}.spec
+        echo "%global debug_package %{nil}"                   > $SPEC
+        echo "Name:           $NAME"                         >> $SPEC
+        echo "Version:        $VERSION"                      >> $SPEC
+        echo "Release:        1"                             >> $SPEC
+        echo "Summary:        $NAME binary package"          >> $SPEC
+        echo "License:        MIT"                           >> $SPEC
+        echo "URL:            $REPO_URL"                     >> $SPEC
+        echo "Source0:        %{name}-%{version}.tar.gz"     >> $SPEC
+        echo "BuildArch: $(uname -m)"                        >> $SPEC
+        echo ""                                              >> $SPEC
+        echo "%description"                                  >> $SPEC
+        echo "Auto-generated package for $NAME."             >> $SPEC
+        echo ""                                              >> $SPEC
+        echo "%prep"                                         >> $SPEC
+        echo "%setup -q"                                     >> $SPEC
+        echo ""                                              >> $SPEC
+        echo "%build"                                        >> $SPEC
+        echo "# nothing"                                     >> $SPEC
+        echo ""                                              >> $SPEC
+        echo "%install"                                      >> $SPEC
+        echo "mkdir -p %{buildroot}$PREFIX"                 >> $SPEC
+        echo "cp -a * %{buildroot}$PREFIX/"                 >> $SPEC
+        echo ""                                              >> $SPEC
+        echo "%files"                                        >> $SPEC
+        echo "$PREFIX/*"                                     >> $SPEC
+        echo ""                                              >> $SPEC
+        echo "%changelog"                                    >> $SPEC
+        echo "* $DATE tty-pt <noreply@github.com> - $VERSION-1" >> $SPEC
+        echo "- Auto-generated build"                        >> $SPEC
+      shell: sh
+
+    - name: Build package (RPM)
+      if: ${{ inputs.format == 'rpm' }}
+      run: |
+        rpmbuild -ba ~/rpmbuild/SPECS/${{ inputs.name }}.spec
+        mkdir -p dist-rpm
+        cp ~/rpmbuild/RPMS/*/*.rpm dist-rpm/
+
+        if [ -n "${{ inputs.gpg_key }}" ]; then
+          echo "Signing RPM..."
+          export GPG_TTY=$(tty || true)
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent
+          gpgconf --launch gpg-agent
+
+          rpmsign --define "_gpg_name ${{ inputs.gpg_keyid }}" \
+            --define "_gpg_sign_cmd_extra_args --pinentry-mode loopback --passphrase '${{ inputs.gpg_pass }}'" \
+            --addsign dist-rpm/*.rpm
+
+        fi
+      shell: sh
+
+    - name: Build package (DEB)
+      if: ${{ inputs.format == 'deb' }}
+      run: |
+        NAME="${{ inputs.name }}"
+        VERSION="${{ steps.version.outputs.version }}"
+        PREFIX="/usr"
+        mkdir -p dist-deb
+
+        echo "Building DEB package for $NAME version $VERSION"
+
+        # Create temporary directory for packaging
+        PKGDIR="${PWD}/pkg-${NAME}_${VERSION}"
+        mkdir -p "$PKGDIR/DEBIAN"
+        mkdir -p "$PKGDIR$PREFIX"
+
+        # Copy staged files into the package root
+        cp -a ./stage/* "$PKGDIR$PREFIX/"
+
+        # Generate control file
+        {
+          echo "Package: $NAME"
+          echo "Version: $VERSION"
+          echo "Section: utils"
+          echo "Priority: optional"
+          echo "Architecture: amd64"
+          echo "Maintainer: tty.pt repo <repo@tty.pt>"
+          echo "Description: $NAME binary package"
+          if [ -n "${{ inputs.deps }}" ]; then
+            echo "Depends: $(echo \"${{ inputs.deps }}\" | tr ',' ', ')"
+          fi
+        } > "$PKGDIR/DEBIAN/control"
+
+        # Set permissions and build
+        chmod -R 755 "$PKGDIR"
+        fakeroot dpkg-deb --build "$PKGDIR"
+        mv "${PKGDIR}.deb" "dist-deb/${NAME}_${VERSION}_amd64.deb"
+
+        if [ -n "${{ inputs.gpg_key }}" ]; then
+          echo "Signing DEB package..."
+          export GPG_TTY=$(tty || true)
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent
+          gpgconf --launch gpg-agent
+
+          echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
+
+          gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${{ inputs.gpg_pass }}" \
+              --detach-sign --armor \
+              -u "${{ inputs.gpg_keyid }}" \
+              "dist-deb/${NAME}_${VERSION}_amd64.deb"
+        fi
+
+        echo "Package built:"
+        ls -l dist-deb/
+      shell: bash
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.name }}-${{ inputs.format }}
+        path: dist-${{ inputs.format }}/*.${{ inputs.ext || inputs.format }}
+
