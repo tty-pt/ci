@@ -133,23 +133,43 @@ runs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
       shell: sh
 
-    - name: Prepare builder user
-      if: inputs.format == 'deb'
+    - name: Generate PKGBUILD
+      if: ${{ inputs.format == 'pacman' }}
+      shell: bash
       run: |
-        if ! id builder >/dev/null 2>&1; then
-          sudo useradd -m builder
-        fi
-        sudo mkdir -p /home/builder
-        sudo chown -R builder:builder /home/builder
-      shell: sh
+        NAME="${{ inputs.name }}"
+        VERSION="${{ steps.version.outputs.version }}"
+        PREFIX="${{ inputs.prefix }}"
+        mkdir -p dist-pacman
 
-    - name: Prepare builder user
-      if: inputs.format != 'deb'
+        {
+          echo "pkgname=$NAME"
+          echo "pkgver=$VERSION"
+          echo "pkgrel=1"
+          echo "pkgdesc=\"$NAME binary package\""
+          echo "arch=('$(uname -m)')"
+          echo "url=\"https://github.com/${{ github.repository }}\""
+          echo "license=('MIT')"
+
+          if [ -n "${{ inputs.deps }}" ]; then
+            echo "depends=($(echo \"${{ inputs.deps }}\" | tr ',' ' '))"
+          fi
+
+          echo "source=()"
+          echo "sha256sums=()"
+          echo ""
+          echo "package() {"
+          echo "  cp -a \"$PWD/stage/\"* \"\$pkgdir/\""
+          echo "}"
+        } > PKGBUILD
+
+    - name: Prepare builder for APK
+      if: inputs.format == 'apk' || inputs.format == 'pacman'
       run: |
         if ! id builder >/dev/null 2>&1; then
-          useradd -m builder
+          adduser -D builder
         fi
-        mkdir -p /home/builder
+        mkdir -p /home/builder/.abuild
         chown -R builder:builder /home/builder
       shell: sh
 
@@ -206,7 +226,7 @@ runs:
         fi
       shell: sh
 
-    - name: Build package (APK)
+    - name: Generate APKBUILD
       if: ${{ inputs.format == 'apk' }}
       run: |
         NAME="${{ inputs.name }}"
@@ -238,7 +258,11 @@ runs:
         chown builder:builder APKBUILD
         echo "Generated APKBUILD:"
         cat APKBUILD
+      shell: sh
 
+    - name: Build package (APK)
+      if: ${{ inputs.format == 'apk' }}
+      run: |
         mkdir -p dist-apk
         chown -R builder:builder .
         
@@ -403,8 +427,27 @@ runs:
         ls -l dist-deb/
       shell: bash
 
+    - name: Build package (macOS)
+      if: ${{ inputs.format == 'macos' }}
+      run: |
+        NAME="${{ inputs.name }}"
+        VERSION="${{ steps.version.outputs.version }}"
+        ARCH="$(uname -m)"
+        mkdir -p dist-macos
+
+        echo "Creating macOS tarball and .pkg installer..."
+        tar czf "dist-macos/${NAME}-${VERSION}-macos-${ARCH}.tar.gz" -C stage .
+
+        pkgbuild --root stage \
+                 --identifier "com.${{ github.repository_owner }}.${NAME}" \
+                 --version "${VERSION}" \
+                 --install-location "/usr/local" \
+                 "dist-macos/${NAME}-${VERSION}-${ARCH}.pkg"
+
+        echo "Built macOS packages:"
+        ls -lh dist-macos/
+      shell: bash
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.name }}-${{ inputs.format }}
-        path: dist-${{ inputs.format }}/*.${{ inputs.ext || inputs.format }}
-
+        path: dist-${{ inputs.format }}/*

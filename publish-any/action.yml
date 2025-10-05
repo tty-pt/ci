@@ -1,0 +1,160 @@
+name: 'publish-any'
+description: 'Publish built packages to remote repositories (APT for now)'
+author: 'tty-pt'
+
+inputs:
+  format:
+    description: 'Repository format (e.g., deb, rpm, apk, pacman)'
+    required: true
+
+  source:
+    description: 'Glob for package files to upload (e.g. dist-deb/*.deb)'
+    required: true
+
+  host:
+    description: 'Remote server hostname'
+    required: true
+
+  user:
+    description: 'Remote SSH username'
+    required: true
+
+  ssh_key:
+    description: 'Private SSH key for upload'
+    required: true
+
+  gpg_key:
+    description: 'Private GPG key (ASCII-armored, optional)'
+    required: false
+    default: ""
+
+  gpg_keyid:
+    description: 'Key ID or fingerprint for signing (optional)'
+    required: false
+    default: ""
+
+  gpg_pass:
+    description: 'Passphrase for GPG key (optional)'
+    required: false
+    default: ""
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup SSH
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ inputs.ssh_key }}" > ~/.ssh/id_ed25519
+        chmod 600 ~/.ssh/id_ed25519
+        ssh-keyscan -H ${{ inputs.host }} >> ~/.ssh/known_hosts
+      shell: bash
+
+    - name: Install required tools
+      if: ${{ inputs.format == 'deb' }}
+      run: |
+        sudo apt-get update
+        sudo rm -f /var/lib/man-db/auto-update
+        sudo apt-get install -y dpkg-dev apt-utils rsync gnupg
+      shell: bash
+
+    - name: Fetch current repo from server
+      if: ${{ inputs.format == 'deb' }}
+      run: |
+        mkdir -p repo-apt
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apt/ repo-apt/ || true
+      shell: bash
+
+    - name: Merge new DEB packages
+      if: ${{ inputs.format == 'deb' }}
+      run: |
+        mkdir -p repo-apt/pool/main
+        for deb in ${{ inputs.source }}; do
+          if [ -f "$deb" ]; then
+            pkg=$(dpkg-deb -f "$deb" Package)
+            ver=$(dpkg-deb -f "$deb" Version)
+            arch=$(dpkg-deb -f "$deb" Architecture)
+            first=$(echo "$pkg" | cut -c1 | tr '[:upper:]' '[:lower:]')
+            target="repo-apt/pool/main/$first/$pkg"
+            mkdir -p "$target"
+            cp "$deb" "$target/${pkg}_${ver}_${arch}.deb"
+            echo "Added $pkg $ver ($arch)"
+          fi
+        done
+      shell: bash
+
+    - name: Generate APT indexes
+      if: ${{ inputs.format == 'deb' }}
+      run: |
+        mkdir -p repo-apt/dists/stable/main/binary-amd64
+        ORIGIN="${GITHUB_REPOSITORY_OWNER}"
+
+        cat > apt-ftparchive.conf <<EOF
+        Dir {
+          ArchiveDir "repo-apt";
+          CacheDir   "repo-apt/.cache";
+        };
+        Default {
+          Packages::Compress ". gzip bzip2 xz";
+          Sources::Compress  ". gzip bzip2 xz";
+          Contents::Compress ". gzip bzip2 xz";
+        };
+        TreeDefault {
+          Directory  "pool/main";
+          Packages   "dists/stable/main/binary-amd64/Packages";
+          Contents   "dists/stable/main/Contents-amd64";
+        };
+        BinDirectory "pool/main" {
+          Packages "dists/stable/main/binary-amd64/Packages";
+          Contents "dists/stable/main/Contents-amd64";
+          Architectures "amd64";
+          Section "main";
+        };
+        APT::FTPArchive::Release {
+          Origin "$ORIGIN";
+          Label "$ORIGIN";
+          Suite "stable";
+          Codename "stable";
+          Components "main";
+          Architectures "amd64";
+          Acquire-By-Hash "yes";
+          Description "APT repository for $ORIGIN";
+        };
+        EOF
+
+        apt-ftparchive generate apt-ftparchive.conf
+        gzip -kf repo-apt/dists/stable/main/binary-amd64/Packages
+        apt-ftparchive -c apt-ftparchive.conf release repo-apt/dists/stable > repo-apt/dists/stable/Release
+      shell: bash
+
+    - name: Import and export GPG key
+      if: ${{ inputs.gpg_key != '' && inputs.format == 'deb' }}
+      run: |
+        echo "${{ inputs.gpg_key }}" | gpg --batch --import
+        mkdir -p repo-apt/keyrings
+        gpg --export --armor "${{ inputs.gpg_keyid }}" > repo-apt/keyrings/archive-key.gpg
+      shell: bash
+
+    - name: Sign Release
+      if: ${{ inputs.gpg_key != '' && inputs.format == 'deb' }}
+      run: |
+        key="${{ inputs.gpg_keyid }}"
+        test -s repo-apt/dists/stable/Release
+
+        gpg --batch --yes --local-user "$key" \
+            --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
+            --digest-algo SHA256 \
+            --clearsign -o repo-apt/dists/stable/InRelease repo-apt/dists/stable/Release
+
+        gpg --batch --yes --local-user "$key" \
+            --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
+            --digest-algo SHA256 \
+            -abs -o repo-apt/dists/stable/Release.gpg repo-apt/dists/stable/Release
+      shell: bash
+
+    - name: Push repo back to server
+      if: ${{ inputs.format == 'deb' }}
+      run: |
+        rsync -avz -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" repo-apt/ \
+          ${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apt/
+      shell: bash
