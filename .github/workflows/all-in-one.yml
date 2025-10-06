@@ -67,7 +67,7 @@ jobs:
       image: ghcr.io/tty-pt/ubuntu-builder:latest
     steps:
     - name: Package APT
-      uses: tty-pt/ci/package-any@main
+      uses: tty-pt/ci/package@main
       with:
         name: ${{ inputs.name }}
         format: 'deb'
@@ -84,7 +84,7 @@ jobs:
       image: ghcr.io/tty-pt/alpine-builder:latest
     steps:
     - name: Package APK
-      uses: tty-pt/ci/package-any@main
+      uses: tty-pt/ci/package@main
       with:
         name: ${{ inputs.name }}
         format: 'apk'
@@ -100,7 +100,7 @@ jobs:
       image: ghcr.io/tty-pt/arch-builder:latest
     steps:
     - name: Package PACMAN
-      uses: tty-pt/ci/package-any@main
+      uses: tty-pt/ci/package@main
       with:
         name: ${{ inputs.name }}
         format: 'pacman'
@@ -118,7 +118,7 @@ jobs:
       image: ghcr.io/tty-pt/rocky-builder:latest
     steps:
     - name: Package RPM
-      uses: tty-pt/ci/package-any@main
+      uses: tty-pt/ci/package@main
       with:
         name: ${{ inputs.name }}
         format: 'rpm'
@@ -133,7 +133,7 @@ jobs:
     runs-on: macos-latest
     steps:
     - name: Package macOS
-      uses: tty-pt/ci/package-any@main
+      uses: tty-pt/ci/package@main
       with:
         name: ${{ inputs.name }}
         format: 'macos'
@@ -168,7 +168,7 @@ jobs:
           path: dist-deb
 
       - name: Publish APT repository
-        uses: tty-pt/ci/publish-any@main
+        uses: tty-pt/ci/publish@main
         with:
           format: 'deb'
           source: 'dist-deb/*'
@@ -193,7 +193,7 @@ jobs:
           path: dist-apk
 
       - name: Publish APK repository
-        uses: tty-pt/ci/publish-any@main
+        uses: tty-pt/ci/publish@main
         with:
           format: 'apk'
           source: 'dist-apk/*'
@@ -217,7 +217,7 @@ jobs:
           path: dist-rpm
 
       - name: Publish RPM repository
-        uses: tty-pt/ci/publish-any@main
+        uses: tty-pt/ci/publish@main
         with:
           format: 'rpm'
           source: 'dist-rpm/*'
@@ -242,7 +242,7 @@ jobs:
           path: dist-pacman
 
       - name: Publish RPM repository
-        uses: tty-pt/ci/publish-any@main
+        uses: tty-pt/ci/publish@main
         with:
           format: 'pacman'
           source: 'dist-pacman/*'
@@ -265,7 +265,7 @@ jobs:
           path: dist-macos
 
       - name: Publish macOS distribution
-        uses: tty-pt/ci/publish-any@main
+        uses: tty-pt/ci/publish@main
         with:
           format: 'macos'
           source: 'dist-macos/*'
