@@ -38,6 +38,10 @@ inputs:
     description: 'Public abuild key (optional)'
     required: false
     default: ""
+  tap_token:
+    description: 'Tap GH token'
+    required: false
+    default: ""
 
 runs:
   using: 'composite'
@@ -213,9 +217,6 @@ runs:
       if: ${{ inputs.format == 'rpm' }}
       shell: sh
       run: |
-        # install base tools
-        dnf install -y rsync createrepo_c gnupg2 rpm-sign || true
-
         mkdir -p repo-rpm/x86_64
 
         # fetch current repo from remote
@@ -326,23 +327,23 @@ runs:
         echo "✅ Pacman repository '${REPO_NAME}' published successfully"
 
     - name: Publish macOS repo
-      if: ${{ inputs.format == 'macos' }}
+      if: ${{ inputs.format == 'brew' }}
       shell: sh
       run: |
         # Prepare SSH + local repo mirror
         mkdir -p "/$HOME/.ssh"
         chmod 700 "/$HOME/.ssh"
         ssh-keyscan -H ${{ inputs.host }} >> "/$HOME/.ssh/known_hosts"
-        mkdir -p repo-macos
+        mkdir -p repo-brew
         rsync -avz -e "ssh -i /$HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/macos/" repo-macos/ || true
+          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/brew/" repo-brew/ || true
 
         # Choose version from tag; fallback to date if needed
         VERSION="${GITHUB_REF_NAME#v}"
         [ -n "$VERSION" ] || VERSION="$(date -u +%Y.%m.%d)"
 
         # Create structure and copy artifacts (skip signatures)
-        mkdir -p "repo-macos/versions/$VERSION" "repo-macos/universal" "repo-macos/arm64" "repo-macos/x86_64"
+        mkdir -p "repo-brew/versions/$VERSION" "repo-brew/universal" "repo-brew/arm64" "repo-brew/x86_64"
 
         COUNT=0
         for f in ${{ inputs.source }}; do
@@ -351,12 +352,12 @@ runs:
           esac
           [ -f "$f" ] || continue
           base=$(basename "$f")
-          cp "$f" "repo-macos/versions/$VERSION/$base"
+          cp "$f" "repo-brew/versions/$VERSION/$base"
           case "$base" in
-            *universal*) cp "$f" repo-macos/universal/ ;;
-            *arm64*)     cp "$f" repo-macos/arm64/ ;;
-            *x86_64*)    cp "$f" repo-macos/x86_64/ ;;
-            *.pkg)       cp "$f" repo-macos/universal/ ;;   # plain .pkg -> universal bucket
+            *universal*) cp "$f" repo-brew/universal/ ;;
+            *arm64*)     cp "$f" repo-brew/arm64/ ;;
+            *x86_64*)    cp "$f" repo-brew/x86_64/ ;;
+            *.pkg)       cp "$f" repo-brew/universal/ ;;   # plain .pkg -> universal bucket
           esac
           COUNT=$((COUNT+1))
         done
@@ -365,24 +366,43 @@ runs:
           echo "No macOS artifacts found to publish"; exit 0
         fi
 
-        ( cd "repo-macos/versions/$VERSION" && \
+        ( cd "repo-brew/versions/$VERSION" && \
           sha256sum * > SHA256SUMS )
 
         if [ -n "${{ inputs.gpg_key }}" ]; then
           mkdir -p "/$HOME/.gnupg"
           chmod 700 "/$HOME/.gnupg"
           echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
-          ( cd "repo-macos/versions/$VERSION" && \
+          ( cd "repo-brew/versions/$VERSION" && \
             gpg --batch --yes --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
                 --detach-sign --armor -u "${{ inputs.gpg_keyid }}" SHA256SUMS || true )
           # publish pubkey for users
-          gpg --export --armor "${{ inputs.gpg_keyid }}" > repo-macos/key.pub || true
+          gpg --export --armor "${{ inputs.gpg_keyid }}" > repo-brew/key.pub || true
         fi
 
-        ( cd repo-macos && rm -f latest && ln -s "versions/$VERSION" latest )
+        ( cd repo-brew && rm -f latest && ln -s "versions/$VERSION" latest )
 
         rsync -avz -e "ssh -i /$HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          repo-macos/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/macos/"
+          repo-brew/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/brew/"
 
         echo "✅ macOS distribution published (versions/$VERSION, latest → $VERSION)"
 
+    - name: Push formula to tty-pt/tap
+      if: inputs.format == 'brew'
+      env:
+        TAP_TOKEN: ${{ inputs.tap_token }}
+      run: |
+        TAP_REPO="https://x-access-token:${TAP_TOKEN}@github.com/tty-pt/tap.git"
+        TAP_DIR="tap"
+
+        git clone --depth=1 "$TAP_REPO" "$TAP_DIR"
+        mkdir -p "$TAP_DIR/Formula"
+        cp dist-brew/*.rb "$TAP_DIR/Formula/"
+
+        cd "$TAP_DIR"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add Formula/*.rb
+        git commit -m "Update ${NAME:-${{ inputs.name }}} to v${VERSION:-${{ github.ref_name }}}" || true
+        git push origin main || echo "No changes to push."
+      shell: bash

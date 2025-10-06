@@ -32,6 +32,10 @@ inputs:
     description: 'Arch dependency names'
     required: false
     default: ''
+  deps_brew:
+    description: 'Brew dependency names'
+    required: false
+    default: ''
   abuild_key:
     description: 'ABUILD key'
     required: false
@@ -100,19 +104,28 @@ runs:
     - name: Add Repo (RPM)
       if: inputs.format == 'rpm'
       run: |
-        dnf install -y dnf-plugins-core || true
         dnf config-manager --set-enabled crb || true
-        dnf install -y epel-release || true
         curl -o /etc/yum.repos.d/ttypt.repo https://tty.pt/rpm/ttypt.repo
+        echo "metadata_expire=never" >> /etc/dnf/dnf.conf
         dnf makecache -y
         dnf repolist
+      shell: sh
+
+    - name: Add Repo (BREW)
+      if: inputs.format == 'brew'
+      run: |
+        brew tap tty-pt/tap https://github.com/tty-pt/tap.git
+        brew update
+        brew tap-info tty-pt/tap || true
       shell: sh
 
     - name: Install prerequisites (APK)
       if: inputs.format == 'apk'
       run: |
+        echo "deps='${{ inputs.deps_apk || inputs.deps }}'" > /tmp/env
+        . /tmp/env
+
         apk add --no-cache alpine-sdk abuild git tar gzip fakeroot gnupg shadow
-        deps="${{ inputs.deps_apk || inputs.deps }}"
         if [ -n "$deps" ]; then
           echo apk add --no-cache $(echo "$deps" | tr ',' ' ')
           apk add --no-cache $(echo "$deps" | tr ',' ' ')
@@ -127,21 +140,24 @@ runs:
       shell: sh
 
     - name: Install prerequisites (DEB)
-      if: ${{ inputs.format == 'deb' }}
+      if: inputs.format == 'deb'
       run: |
+        echo "deps='${{ inputs.deps_deb || inputs.deps }}'" > /tmp/env
+        . /tmp/env
+
         sudo rm -f /var/lib/man-db/auto-update
         sudo apt-get install -y dpkg-dev fakeroot gnupg git
-        deps="${{ inputs.deps_deb || inputs.deps }}"
         if [ -n "$deps" ]; then
           sudo apt-get install -y $(echo "$deps" | tr ',' ' ')
         fi
       shell: sh
 
     - name: Install prerequisites (RPM)
-      if: ${{ inputs.format == 'rpm' }}
+      if: inputs.format == 'rpm'
       run: |
-        dnf install -y git make gcc rpm-build rpm-sign
-        deps="${{ inputs.deps_rpm || inputs.deps }}"
+        echo "deps='${{ inputs.deps_rpm || inputs.deps }}'" > /tmp/env
+        . /tmp/env
+
         if [ -n "$deps" ]; then
           for dep in $(echo "$deps" | tr ',' ' '); do
             dnf install -y "$dep"
@@ -150,26 +166,91 @@ runs:
       shell: sh
 
     - name: Install prerequisites (PACMAN)
-      if: ${{ inputs.format == 'pacman' }}
+      if: inputs.format == 'pacman'
       run: |
+        echo "deps='${{ inputs.deps_pacman || inputs.deps }}'" > /tmp/env
+        . /tmp/env
+
         pacman -Sy --noconfirm base-devel git tar gzip zstd
-        deps="${{ inputs.deps_pacman || inputs.deps }}"
         if [ -n "$deps" ]; then
           pacman -S --noconfirm $(echo "$deps" | tr ',' ' ')
         fi
       shell: sh
 
-    - name: Import GPG key (if provided)
-      if: ${{ inputs.gpg_key != '' && inputs.format != 'apk' }}
+    - name: Install prerequisites (BREW)
+      if: inputs.format == 'brew'
       run: |
-        mkdir -p ~/.gnupg
-        chmod 700 ~/.gnupg
-        echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
-        echo "%_gpg_name ${{ inputs.gpg_keyid }}" > ~/.rpmmacros
+        echo "deps='${{ inputs.deps_brew || inputs.deps }}'" > /tmp/env
+        . /tmp/env
+
+        brew update
+        brew install coreutils git bmake || true
+
+        if [ -n "$deps" ]; then
+          for dep in $(echo "$deps" | tr ',' ' '); do
+            brew install "$dep" || true
+            brew list -v "$dep"
+          done
+        fi
+      shell: sh
+
+    - name: Prepare enviroment vars
+      run: |
+        echo "VERSION=${GITHUB_REF_NAME#v}" >> /tmp/env
+        echo "NAME='${{ inputs.name }}'"    >> /tmp/env
+        echo "PREFIX=/usr"            >> /tmp/env
+      shell: sh
+
+    - name: Prepare builder for APK
+      if: inputs.format == 'apk' || inputs.format == 'pacman'
+      run: |
+        if ! id builder >/dev/null 2>&1; then
+          adduser -D builder
+        fi
+        mkdir -p /home/builder/.abuild
+        chown -R builder:builder /home/builder
+      shell: sh
+
+    - name: Fetch include.mk from tty-pt/mk
+      run: |
+        git clone --branch main https://github.com/tty-pt/mk ../mk
+      shell: sh
+
+    - name: Build and stage project
+      if: inputs.format != 'brew'
+      run: |
+        . /tmp/env
+        export PATH="/usr/bin:/bin:$PATH"
+
+        make
+        make DESTDIR=$PWD/stage PREFIX=$PREFIX install
+      shell: sh
+
+    - name: Build and stage project
+      if: inputs.format == 'brew'
+      run: |
+        . /tmp/env
+        export PATH="/usr/bin:/bin:$PATH"
+
+        bmake
+        bmake DESTDIR=$PWD/stage PREFIX=$PREFIX install
+      shell: sh
+
+    - name: Loopback GPG entry
+      if: inputs.gpg_key != ''
+      run: |
+          export GPG_TTY=$(tty || true)
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent
+          gpgconf --launch gpg-agent
+          echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
+          echo "%_gpg_name ${{ inputs.gpg_keyid }}" > ~/.rpmmacros
       shell: sh
 
     - name: Import abuild key
-      if: ${{ inputs.abuild_key != '' && inputs.format == 'apk' }}
+      if: inputs.abuild_key != ''
       run: |
         mkdir -p /home/builder/.abuild
         echo "${{ inputs.abuild_key }}" > /home/builder/.abuild/ttypt.rsa
@@ -183,32 +264,11 @@ runs:
         chown -R builder:builder /home/builder/.abuild
       shell: sh
 
-    - name: Fetch include.mk from tty-pt/mk
-      run: |
-        git clone --branch main https://github.com/tty-pt/mk ../mk
-      shell: sh
-
-    - name: Build and stage project
-      run: |
-        make
-        make DESTDIR=$PWD/stage PREFIX=/usr install
-      shell: sh
-
-    - name: Resolve version from tag
-      id: version
-      run: |
-        VERSION="${GITHUB_REF_NAME#v}"
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-      shell: sh
-
     - name: Generate PKGBUILD
-      if: ${{ inputs.format == 'pacman' }}
-      shell: bash
+      if: inputs.format == 'pacman'
+      shell: sh
       run: |
-        NAME="${{ inputs.name }}"
-        VERSION="${{ steps.version.outputs.version }}"
-        PREFIX="${{ inputs.prefix }}"
-        mkdir -p dist-pacman
+        . /tmp/env
 
         {
           echo "pkgname=$NAME"
@@ -219,7 +279,6 @@ runs:
           echo "url=\"https://github.com/${{ github.repository }}\""
           echo "license=('MIT')"
 
-          deps="${{ inputs.deps_pacman || inputs.deps }}"
           if [ -n "$deps" ]; then
             echo "depends=($(echo $deps | tr ',' ' '))"
           fi
@@ -232,76 +291,24 @@ runs:
           echo "}"
         } > PKGBUILD
 
-    - name: Prepare builder for APK
-      if: inputs.format == 'apk' || inputs.format == 'pacman'
-      run: |
-        if ! id builder >/dev/null 2>&1; then
-          adduser -D builder
-        fi
-        mkdir -p /home/builder/.abuild
-        chown -R builder:builder /home/builder
-      shell: sh
-
     - name: Build package (PACMAN)
-      if: ${{ inputs.format == 'pacman' }}
+      if: inputs.format == 'pacman'
       run: |
-        NAME="${{ inputs.name }}"
-        VERSION="${{ steps.version.outputs.version }}"
-        PREFIX="${{ inputs.prefix }}"
-
         mkdir -p dist-pacman
         chown -R builder:builder "$PWD"
 
-        {
-          echo "pkgname=$NAME"
-          echo "pkgver=$VERSION"
-          echo "pkgrel=1"
-          echo "pkgdesc=\"$NAME binary package\""
-          echo "arch=('$(uname -m)')"
-          echo "url=\"https://github.com/${{ github.repository }}\""
-          echo "license=('MIT')"
-
-          deps="${{ inputs.deps_pacman || inputs.deps }}"
-          if [ -n "$deps" ]; then
-            echo "depends=($(echo $deps | tr ',' ' '))"
-          fi
-
-          echo "source=()"
-          echo "sha256sums=()"
-          echo ""
-          echo "package() {"
-          echo "  cp -a \"$PWD/stage/\"* \"\$pkgdir/\""
-          echo "}"
-        } > PKGBUILD
-
-        mkdir -p dist-pacman
         sudo -u builder sh -c '
           cd "$PWD"
           makepkg -sf --noconfirm --nodeps
           mkdir -p dist-pacman
           mv *.pkg.tar.* dist-pacman/ || true
         '
-        if [ -n "${{ inputs.gpg_key }}" ]; then
-          echo "Signing Pacman package..."
-          export GPG_TTY=$(tty || true)
-          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-          gpgconf --kill gpg-agent
-          gpgconf --launch gpg-agent
-
-          for pkg in dist-pacman/*.pkg.tar.*; do
-            gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${{ inputs.gpg_pass }}" \
-              --detach-sign --armor -u "${{ inputs.gpg_keyid }}" "$pkg"
-          done
-        fi
       shell: sh
 
     - name: Generate APKBUILD
-      if: ${{ inputs.format == 'apk' }}
+      if: inputs.format == 'apk'
       run: |
-        NAME="${{ inputs.name }}"
-        VERSION="${{ steps.version.outputs.version }}"
-        mkdir -p dist-apk
+        . /tmp/env
 
         {
           echo "# Maintainer: tty.pt repo <repo@tty.pt>"
@@ -313,7 +320,6 @@ runs:
           echo "arch=\"$(uname -m)\""
           echo "license=\"MIT\""
           echo "maintainer=\"tty.pt repo <repo@tty.pt>\""
-          deps="${{ inputs.deps_apk || inputs.deps }}"
           if [ -n "$deps" ]; then
             echo "depends=\"$(echo $deps | tr ',' ' ')\""
           fi
@@ -332,7 +338,7 @@ runs:
       shell: sh
 
     - name: Build package (APK)
-      if: ${{ inputs.format == 'apk' }}
+      if: inputs.format == 'apk'
       run: |
         mkdir -p dist-apk
         chown -R builder:builder .
@@ -361,116 +367,98 @@ runs:
       shell: sh
 
     - name: Generate tarball from ./stage
-      if: ${{ inputs.format == 'rpm' }}
+      if: inputs.format == 'rpm'
       run: |
-        NAME="${{ inputs.name }}"
-        VERSION="${{ steps.version.outputs.version }}"
-        TMPDIR="/tmp/${NAME}-${VERSION}"
-        mkdir -p "$TMPDIR"
-        cp -a ./stage/* "$TMPDIR/"
-        mkdir -p ~/rpmbuild/SOURCES
-        tar czf ~/rpmbuild/SOURCES/${NAME}-${VERSION}.tar.gz -C /tmp ${NAME}-${VERSION}
-      shell: sh
+        . /tmp/env
 
-    - name: Prepare rpmbuild tree manually
-      if: ${{ inputs.format == 'rpm' }}
-      run: |
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-        mkdir -p dist-rpm
+
+        tar czf ~/rpmbuild/SOURCES/${NAME}-${VERSION}.tar.gz -C stage .
+        echo "Created tarball directly from staged install tree."
+
+        mkdir -p ~/rpmbuild/BUILD/${NAME}-${VERSION}
+        cp -a stage/* ~/rpmbuild/BUILD/${NAME}-${VERSION}/
+        echo "Copied staged files into rpmbuild BUILD context."
       shell: sh
 
     - name: Generate .spec file
-      if: ${{ inputs.format == 'rpm' }}
+      if: inputs.format == 'rpm'
       run: |
-        NAME="${{ inputs.name }}"
-        VERSION="${{ steps.version.outputs.version }}"
-        PREFIX="${{ inputs.prefix }}"
+        . /tmp/env
+
         REPO_URL="https://github.com/${{ github.repository }}"
-        DATE="$(date "+%a %b %d %Y")"
+        DATE="$(date '+%a %b %d %Y')"
 
         SPEC=~/rpmbuild/SPECS/${NAME}.spec
-        echo "%global debug_package %{nil}"                   > $SPEC
-        echo "Name:           $NAME"                         >> $SPEC
-        echo "Version:        $VERSION"                      >> $SPEC
-        echo "Release:        1"                             >> $SPEC
-        echo "Summary:        $NAME binary package"          >> $SPEC
-        echo "License:        MIT"                           >> $SPEC
-        echo "URL:            $REPO_URL"                     >> $SPEC
-        echo "Source0:        %{name}-%{version}.tar.gz"     >> $SPEC
-        echo "BuildArch: $(uname -m)"                        >> $SPEC
-        deps="${{ inputs.deps_rpm || inputs.deps }}"
+        {
+          echo "%global debug_package %{nil}"
+          echo "AutoReqProv: no"
+        } > $SPEC
+
+        echo "Name:           $NAME"      >> $SPEC
+        echo "Version:        $VERSION"   >> $SPEC
+        echo "Release:        1"          >> $SPEC
+        echo "Summary:        $NAME binary package" >> $SPEC
+        echo "License:        MIT"        >> $SPEC
+        echo "URL:            $REPO_URL"  >> $SPEC
+        echo "Source0:        %{name}-%{version}.tar.gz" >> $SPEC
+        echo "BuildArch: $(uname -m)"     >> $SPEC
         if [ -n "$deps" ]; then
           for dep in $(echo "$deps" | tr ',' ' '); do
             echo "Requires: $dep" >> $SPEC
           done
         fi
         echo "" >> $SPEC
-        echo "%description"                                  >> $SPEC
-        echo "Auto-generated package for $NAME."             >> $SPEC
-        echo ""                                              >> $SPEC
-        echo "%prep"                                         >> $SPEC
-        # echo "%setup -q"                                     >> $SPEC
-        echo ""                                              >> $SPEC
-        echo "%build"                                        >> $SPEC
-        echo "# nothing"                                     >> $SPEC
-        echo ""                                              >> $SPEC
-        echo "%install"                                      >> $SPEC
-        echo "mkdir -p %{buildroot}$PREFIX"                 >> $SPEC
-        echo "cp -a $PWD/stage/* %{buildroot}$PREFIX/"                 >> $SPEC
-        echo ""                                              >> $SPEC
-        echo "%files"                                        >> $SPEC
+        echo "%description"               >> $SPEC
+        echo "Auto-generated package for $NAME." >> $SPEC
+        echo ""                           >> $SPEC
+        echo "%prep"                      >> $SPEC
+        echo ""                           >> $SPEC
+        echo "%build"                     >> $SPEC
+        echo "# nothing"                  >> $SPEC
+        echo ""                           >> $SPEC
+        echo "%install"                   >> $SPEC
+        echo "mkdir -p %{buildroot}$PREFIX" >> $SPEC
+        echo "cp -a %{_builddir}/${NAME}-${VERSION}/$PREFIX/* %{buildroot}$PREFIX/" >> $SPEC
+        echo ""                           >> $SPEC
+        echo "%files"                     >> $SPEC
 
         test ! -d stage/usr/lib \
-          || echo "/usr/lib/*" >> $SPEC
+          || echo "$PREFIX/lib/*" >> $SPEC
         test ! -d stage/usr/include \
-          || echo "/usr/include/*" >> $SPEC
+          || echo "$PREFIX/include/*" >> $SPEC
         test ! -d stage/usr/bin \
-          || echo "/usr/bin/*" >> $SPEC
-        echo ""                                              >> $SPEC
-        echo "%changelog"                                    >> $SPEC
+          || echo "$PREFIX/bin/*" >> $SPEC
+
+        echo ""                           >> $SPEC
+        echo "%changelog"                 >> $SPEC
         echo "* $DATE tty-pt <noreply@github.com> - $VERSION-1" >> $SPEC
-        echo "- Auto-generated build"                        >> $SPEC
+        echo "- Auto-generated build"     >> $SPEC
       shell: sh
 
     - name: Build package (RPM)
-      if: ${{ inputs.format == 'rpm' }}
+      if: inputs.format == 'rpm'
       run: |
         rpmbuild -ba ~/rpmbuild/SPECS/${{ inputs.name }}.spec
+
         mkdir -p dist-rpm
         cp ~/rpmbuild/RPMS/*/*.rpm dist-rpm/
-
-        if [ -n "${{ inputs.gpg_key }}" ]; then
-          echo "Signing RPM..."
-          export GPG_TTY=$(tty || true)
-          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-          gpgconf --kill gpg-agent
-          gpgconf --launch gpg-agent
-
-          rpmsign --define "_gpg_name ${{ inputs.gpg_keyid }}" \
-            --define "_gpg_sign_cmd_extra_args --pinentry-mode loopback --passphrase '${{ inputs.gpg_pass }}'" \
-            --addsign dist-rpm/*.rpm
-
-        fi
       shell: sh
 
     - name: Build package (DEB)
-      if: ${{ inputs.format == 'deb' }}
+      if: inputs.format == 'deb'
       run: |
-        NAME="${{ inputs.name }}"
-        VERSION="${{ steps.version.outputs.version }}"
-        PREFIX="/usr"
+        . /tmp/env
+
         mkdir -p dist-deb
 
         echo "Building DEB package for $NAME version $VERSION"
 
-        # Create temporary directory for packaging
         PKGDIR="${PWD}/pkg-${NAME}_${VERSION}"
         mkdir -p "$PKGDIR/DEBIAN"
 
-        # Copy staged files into the package root
         cp -a ./stage/* "$PKGDIR/"
 
-        # Generate control file
         {
           echo "Package: $NAME"
           echo "Version: $VERSION"
@@ -479,7 +467,6 @@ runs:
           echo "Architecture: amd64"
           echo "Maintainer: tty.pt repo <repo@tty.pt>"
           echo "Description: $NAME binary package"
-          deps="${{ inputs.deps_apk || inputs.deps }}"
           deps_clean=$(echo "$deps" | tr -d '"' | tr ',' ', ')
           if [ -n "$deps_clean" ]; then
             echo "Depends: $deps_clean"
@@ -491,31 +478,14 @@ runs:
         fakeroot dpkg-deb --build "$PKGDIR"
         mv "${PKGDIR}.deb" "dist-deb/${NAME}_${VERSION}_amd64.deb"
 
-        if [ -n "${{ inputs.gpg_key }}" ]; then
-          echo "Signing DEB package..."
-          export GPG_TTY=$(tty || true)
-          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-          gpgconf --kill gpg-agent
-          gpgconf --launch gpg-agent
-
-          echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
-
-          gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${{ inputs.gpg_pass }}" \
-              --detach-sign --armor \
-              -u "${{ inputs.gpg_keyid }}" \
-              "dist-deb/${NAME}_${VERSION}_amd64.deb"
-        fi
-
         echo "Package built:"
         ls -l dist-deb/
-      shell: bash
+      shell: sh
 
     - name: Build package (macOS)
-      if: ${{ inputs.format == 'macos' }}
+      if: inputs.format == 'macos'
       run: |
-        NAME="${{ inputs.name }}"
-        VERSION="${{ steps.version.outputs.version }}"
+        . /tmp/env
         ARCH="$(uname -m)"
         mkdir -p dist-macos
 
@@ -530,7 +500,90 @@ runs:
 
         echo "Built macOS packages:"
         ls -lh dist-macos/
-      shell: bash
+      shell: sh
+
+    - name: Generate formula (BREW)
+      if: inputs.format == 'brew'
+      run: |
+        . /tmp/env
+
+        ARCH="$(uname -m)"
+        mkdir -p dist-brew
+
+        echo "Packaging stage directory..."
+        TARBALL="dist-brew/${NAME}-${VERSION}.tar.gz"
+        tar czf "$TARBALL" -C stage .
+
+        SHA256=$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)
+        FORMULA_PATH="dist-brew/${NAME}.rb"
+
+        CLASS_NAME="$(perl -pe 's/(?:^|_)([a-z])/\u$1/g' <<< "$NAME")"
+
+        {
+          echo "class ${CLASS_NAME} < Formula"
+          echo "  desc \"$NAME binary package\""
+          echo "  homepage \"https://github.com/${{ github.repository }}\""
+          echo "  url \"https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${NAME}-${VERSION}.tar.gz\""
+          echo "  sha256 \"$SHA256\""
+          echo "  version \"$VERSION\""
+
+          # Add dependencies if defined
+          if [ -n "$deps" ]; then
+            for dep in $(echo "$deps" | tr ',' ' '); do
+              echo "  depends_on \"$dep\""
+            done
+          fi
+
+          echo ""
+          echo "  def install"
+          echo "    include.install Dir[\"include/*.h\"] if Dir.exist?(\"include\")"
+          echo "    lib.install Dir[\"lib/*\"] if Dir.exist?(\"lib\")"
+          echo "    bin.install Dir[\"bin/*\"] if Dir.exist?(\"bin\")"
+          echo "  end"
+          echo ""
+          echo "  test do"
+          echo "    system \"true\""
+          echo "  end"
+          echo "end"
+        } > "$FORMULA_PATH"
+
+        echo "Generated Homebrew formula:"
+        cat "$FORMULA_PATH"
+      shell: sh
+
+    - name: Sign package (PACMAN + DEB)
+      if: (inputs.format == 'pacman'
+        || inputs.format == 'deb')
+        && inputs.gpg_key != ''
+      run: |
+        ext=${{ inputs.ext || inputs.format }}
+        for pkg in dist-${{ inputs.format }}/*.$ext; do
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "${{ inputs.gpg_pass }}" \
+            --detach-sign --armor -u "${{ inputs.gpg_keyid }}" "$pkg"
+        done
+      shell: sh
+
+    - name: Sign package (RPM)
+      if: inputs.format == 'rpm' && inputs.gpg_key != ''
+      run: |
+        rpmsign --define "_gpg_name ${{ inputs.gpg_keyid }}" \
+          --define "_gpg_sign_cmd_extra_args --pinentry-mode loopback --passphrase '${{ inputs.gpg_pass }}'" \
+          --addsign dist-rpm/*.rpm
+      shell: sh
+
+    - name: Sign package (APK)
+      if: inputs.format == 'apk' && inputs.abuild_key != ''
+      run: |
+        su builder -c '
+          cd "$PWD"
+          for pkg in dist-apk/*.apk; do
+            echo "Signing $pkg"
+            abuild-sign -k /home/builder/.abuild/ttypt.rsa "$pkg"
+          done
+        '
+      shell: sh
+
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.name }}-${{ inputs.format }}

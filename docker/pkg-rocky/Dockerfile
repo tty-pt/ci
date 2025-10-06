@@ -14,8 +14,11 @@ ARG UID=1001
 # ------------------------------------------------------------
 # 🔧 Ferramentas base
 # ------------------------------------------------------------
+
 RUN dnf -y update && \
     dnf -y install \
+	epel-release \
+	dnf-plugins-core \
         git \
         make \
         gcc \
