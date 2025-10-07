@@ -4,13 +4,25 @@ author: 'tty-pt'
 
 inputs:
   include_checksums:
-    description: 'Include a single global SHA256SUMS file in the release'
+    description: 'Include a single global CHECKSUMS file in the release'
     required: false
     default: 'true'
   generate_release_notes:
     description: 'Generate release notes automatically'
     required: false
     default: 'true'
+  gpg_key:
+    description: 'ASCII-armored private key for signing CHECKSUMS'
+    required: false
+    default: ''
+  gpg_keyid:
+    description: 'Key ID or fingerprint for signing'
+    required: false
+    default: ''
+  gpg_pass:
+    description: 'Passphrase for the GPG key'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -27,17 +39,28 @@ runs:
       with:
         path: release/
 
-    - name: Generate single global SHA256SUMS
+    - name: Clean per-file signatures and generate unified CHECKSUMS
       if: ${{ inputs.include_checksums == 'true' }}
       run: |
-        echo "Generating unified SHA256SUMS for all artifacts..."
+        echo "Cleaning .asc files and generating CHECKSUMS..."
         cd release
-        # remove any per-job SHA256SUMS if they exist
-        find . -type f -name 'SHA256SUMS' -delete || true
-        # generate one clean file for everything else
-        find . -type f -exec sha256sum {} \; | sort > SHA256SUMS
-        echo "Generated checksums:"
-        cat SHA256SUMS
+        # remove individual signatures and any old checksum files
+        find . -type f \( -name '*.asc' -o -name 'SHA256SUMS' -o -name 'CHECKSUMS' \) -delete || true
+        # compute fresh checksums for remaining files
+        find . -type f -exec sha256sum {} \; | sort > CHECKSUMS
+        echo "Generated CHECKSUMS:"
+        cat CHECKSUMS
+      shell: bash
+
+    - name: Sign CHECKSUMS
+      if: ${{ inputs.gpg_key != '' }}
+      run: |
+        echo "Importing GPG key and signing CHECKSUMS..."
+        mkdir -p ~/.gnupg && chmod 700 ~/.gnupg
+        echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
+        gpg --batch --yes --local-user "${{ inputs.gpg_keyid }}" \
+            --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
+            --armor --detach-sign -o release/CHECKSUMS.asc release/CHECKSUMS
       shell: bash
 
     - name: Extract release notes
@@ -47,16 +70,9 @@ runs:
 
         if [ -f CHANGELOG.md ]; then
           awk "/^## \\[$TAG\\]|^## $TAG/ {found=1; next} /^## \\[/ && found {exit} found {print}" CHANGELOG.md > RELEASE_NOTES.md
+        fi
 
-          if [ ! -s RELEASE_NOTES.md ]; then
-            echo "## $TAG" > RELEASE_NOTES.md
-            echo "" >> RELEASE_NOTES.md
-            echo "### Changes" >> RELEASE_NOTES.md
-            echo "- Version $TAG" >> RELEASE_NOTES.md
-            echo "- Built from commit $(git rev-parse --short HEAD 2>/dev/null || echo unknown)" >> RELEASE_NOTES.md
-            echo "- Built on $(date -u +%Y-%m-%d)" >> RELEASE_NOTES.md
-          fi
-        else
+        if [ ! -s RELEASE_NOTES.md ]; then
           echo "## $TAG" > RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
           echo "### Version Info" >> RELEASE_NOTES.md
@@ -65,11 +81,12 @@ runs:
           echo "- Build date: $(date -u +%Y-%m-%d)" >> RELEASE_NOTES.md
         fi
 
-        if [ -f release/SHA256SUMS ]; then
+        if [ -f release/CHECKSUMS ]; then
           echo "" >> RELEASE_NOTES.md
           echo "### Verification" >> RELEASE_NOTES.md
           echo '```bash' >> RELEASE_NOTES.md
-          echo "sha256sum -c SHA256SUMS" >> RELEASE_NOTES.md
+          echo "gpg --verify CHECKSUMS.asc" >> RELEASE_NOTES.md
+          echo "sha256sum -c CHECKSUMS" >> RELEASE_NOTES.md
           echo '```' >> RELEASE_NOTES.md
         fi
 

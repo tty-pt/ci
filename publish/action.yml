@@ -3,9 +3,19 @@ description: 'Publish built packages to remote repositories (APT, APK, RPM, PACM
 author: 'tty-pt'
 
 inputs:
+  name:
+    description: 'Package name'
+    required: true
   format:
     description: 'Repository format (deb, rpm, apk, pacman)'
     required: true
+  deps:
+    description: 'Generic dependencies'
+    required: false
+  deps_brew:
+    description: 'Brew dependency names'
+    required: false
+    default: ''
   source:
     description: 'Glob for package files to upload (e.g., dist-deb/*.deb)'
     required: true
@@ -46,59 +56,113 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Configure SSH for Host
+      shell: sh
+      run: |
+        mkdir -p $HOME/.ssh
+        chmod 700 $HOME/.ssh
+
+        echo "${{ inputs.ssh_key }}" > ~/.ssh/id_ed25519
+        chmod 600 $HOME/.ssh/id_ed25519
+
+        IP=$(getent hosts "$HOST" | awk '{print $1}' || true)
+
+        ssh-keyscan -H "${{ inputs.host }}" >> "$HOME/.ssh/known_hosts"
+
+        HOSTNAME="${{ inputs.host }}"
+        USER="${{ inputs.user }}"
+
+        cat > $HOME/.ssh/config <<EOF
+        Host tty.pt
+          HostName $HOSTNAME
+          User $USER
+          IdentityFile $HOME/.ssh/id_ed25519
+          IdentitiesOnly yes
+          UserKnownHostsFile /dev/null
+          StrictHostKeyChecking no
+          LogLevel ERROR
+          BatchMode yes
+          ConnectTimeout 5
+        EOF
+        chmod 600 $HOME/.ssh/config $HOME/.ssh/known_hosts
+        cat $HOME/.ssh/config
+
+        echo "✅ SSH config prepared for host"
+
+    - name: Prepare enviroment vars
+      id: mkenv
+      run: |
+        VERSION="${GITHUB_REF_NAME#v}"
+        [ -n "$VERSION" ] || VERSION="$(date -u +%Y.%m.%d)"
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "PREFIX=/usr" >> $GITHUB_ENV
+        arch="$(uname -m)"
+        echo "arch=$arch" >> $GITHUB_ENV
+        echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
+      shell: sh
+
+    - name: Download APK artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: dist
+
     - name: Setup environment
       shell: sh
       run: |
-        mkdir -p "$HOME/.ssh"
-        chmod 700 "$HOME/.ssh"
-        echo "${{ inputs.ssh_key }}" > "$HOME/.ssh/id_ed25519"
-        chmod 600 "$HOME/.ssh/id_ed25519"
-        ssh-keyscan -H "${{ inputs.host }}" >> "$HOME/.ssh/known_hosts"
-
         if [ -n "${{ inputs.gpg_key }}" ]; then
           mkdir -p "$HOME/.gnupg"
           chmod 700 "$HOME/.gnupg"
           echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
         fi
 
-    - name: Install tools (APT)
-      if: ${{ inputs.format == 'deb' }}
+    - name: Prepare repo folder
+      if: inputs.format != 'openbsd'
       shell: sh
       run: |
-        sudo apt-get update -y
-        sudo apt-get install -y dpkg-dev apt-utils rsync gnupg
+        mkdir -p repo
+
+        find dist -path "*-${{ inputs.format }}-*"
+
+        rsync -avz -e "ssh -F $HOME/.ssh/config" \
+          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ inputs.format }}/" repo/
+
+        cd repo
+        find ../dist -mindepth 2 -maxdepth 2 \
+          -path "*-${{ inputs.format }}-*" \
+          -exec cp -r {} . \;
+        sha256sum `find . -type f` > SHA256SUMS
+        cd - 2>/dev/null
+
+        echo REPO FOLDER INIT
+        find repo -type f
 
     - name: Publish APT repo
-      if: ${{ inputs.format == 'deb' }}
+      if: inputs.format == 'deb'
       shell: sh
       run: |
-        mkdir -p repo-apt
-        rsync -avz -e "ssh -i /$HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apt/" repo-apt/ || true
+        mkdir -p repo/pool/main
 
-        mkdir -p repo-apt/pool/main
-        for deb in ${{ inputs.source }}; do
-          case "$deb" in
-            *.asc|*.sig) continue ;;  # skip signatures
-          esac
-          if [ -f "$deb" ]; then
-            pkg=$(dpkg-deb -f "$deb" Package)
-            ver=$(dpkg-deb -f "$deb" Version)
-            arch=$(dpkg-deb -f "$deb" Architecture)
-            first=$(echo "$pkg" | cut -c1 | tr '[:upper:]' '[:lower:]')
-            target="repo-apt/pool/main/$first/$pkg"
-            mkdir -p "$target"
-            cp "$deb" "$target/${pkg}_${ver}_${arch}.deb"
-          fi
+        cd repo
+        for deb in $(find . -name "*.deb"); do
+          pkg=$(dpkg-deb -f "$deb" Package)
+          ver=$(dpkg-deb -f "$deb" Version)
+          arch=$(dpkg-deb -f "$deb" Architecture)
+          first=$(echo "$pkg" | cut -c1 | tr '[:upper:]' '[:lower:]')
+          target="pool/main/$first/$pkg"
+          mkdir -p "$target"
+          test "$deb" != "./$target/${pkg}_${ver}_${arch}.deb" || continue
+          mv "$deb" "$target/${pkg}_${ver}_${arch}.deb"
+          mv "$deb.asc" "$target/${pkg}_${ver}_${arch}.deb.asc"
         done
+        cd - 2>/dev/null
 
-        mkdir -p repo-apt/dists/stable/main/binary-amd64
+        mkdir -p repo/dists/stable/main/binary-amd64
         ORIGIN="${GITHUB_REPOSITORY_OWNER}"
 
         cat > apt-ftparchive.conf <<EOF
         Dir {
-          ArchiveDir "repo-apt";
-          CacheDir   "repo-apt/.cache";
+          ArchiveDir "repo";
+          CacheDir   "repo/.cache";
         };
         Default {
           Packages::Compress ". gzip bzip2 xz";
@@ -124,30 +188,27 @@ runs:
         EOF
 
         apt-ftparchive generate apt-ftparchive.conf
-        gzip -kf repo-apt/dists/stable/main/binary-amd64/Packages
-        apt-ftparchive -c apt-ftparchive.conf release repo-apt/dists/stable > repo-apt/dists/stable/Release
+        gzip -kf repo/dists/stable/main/binary-amd64/Packages
+        apt-ftparchive -c apt-ftparchive.conf release repo/dists/stable > repo/dists/stable/Release
 
         if [ -n "${{ inputs.gpg_key }}" ]; then
           mkdir -p /$HOME/.gnupg
           chmod 700 /$HOME/.gnupg
           echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
-          mkdir -p repo-apt/keyrings
-          gpg --export --armor "${{ inputs.gpg_keyid }}" > repo-apt/keyrings/archive-key.gpg
+          mkdir -p repo/keyrings
+          gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/keyrings/archive-key.gpg
 
           gpg --batch --yes --local-user "${{ inputs.gpg_keyid }}" \
               --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
-              --clearsign -o repo-apt/dists/stable/InRelease repo-apt/dists/stable/Release
+              --clearsign -o repo/dists/stable/InRelease repo/dists/stable/Release
 
           gpg --batch --yes --local-user "${{ inputs.gpg_keyid }}" \
               --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
-              -abs -o repo-apt/dists/stable/Release.gpg repo-apt/dists/stable/Release
+              -abs -o repo/dists/stable/Release.gpg repo/dists/stable/Release
         fi
 
-        rsync -avz -e "ssh -i /$HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          repo-apt/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apt/"
-
     - name: Import abuild key
-      if: ${{ inputs.abuild_key != '' && inputs.format == 'apk' }}
+      if: inputs.abuild_key != '' && inputs.format == 'apk'
       run: |
         mkdir -p /home/builder/.abuild
         echo "${{ inputs.abuild_key }}" > /home/builder/.abuild/ttypt.rsa
@@ -162,26 +223,11 @@ runs:
       shell: sh
 
     - name: Publish APK repo
-      if: ${{ inputs.format == 'apk' }}
+      if: inputs.format == 'apk'
       shell: sh
       run: |
-        apk add --no-cache abuild apk-tools rsync openssh-client
-
-        ARCH="$(apk --print-arch || uname -m)"
-        mkdir -p repo-apk/"$ARCH"
-        echo "Fetching existing APK repo from remote..."
-        rsync -avz -e "ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apk/" repo-apk/ || true
-
-        echo "Copying new APKs into local repo..."
-        for apkf in ${{ inputs.source }}; do
-          case "$apkf" in
-            *.asc|*.sig) continue ;;
-          esac
-          [ -f "$apkf" ] && cp "$apkf" repo-apk/"$ARCH"/
-        done
-
-        cd repo-apk/"$ARCH" || exit 1
+        mkdir repo/${{ env.arch }} || true
+        cd repo/${{ env.arch }} || exit 1
 
         echo "Generating new APKINDEX.tar.gz..."
         rm -f APKINDEX.tar.gz
@@ -205,31 +251,21 @@ runs:
         fi
 
         cd ..
-        echo "Uploading repository..."
-
-        rsync -avz --delete -e "ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          ./ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/apk/"
-        cd ..
-
-        echo "✅ APK repository published successfully"
 
     - name: Publish RPM repo
-      if: ${{ inputs.format == 'rpm' }}
+      if: inputs.format == 'rpm'
       shell: sh
       run: |
-        mkdir -p repo-rpm/x86_64
+        mkdir -p repo/${{ env.arch }}
 
-        # fetch current repo from remote
-        rsync -avz -e "ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/rpm/" repo-rpm/ || true
-
-        # copy new rpm files
-        for rpm in ${{ inputs.source }}; do
-          [ -f "$rpm" ] && cp "$rpm" repo-rpm/x86_64/
+        cd repo
+        for file in $(ls *.rpm); do
+          mv $file ${{ env.arch }}
         done
+        cd - 2>/dev/null
 
         # (re)generate metadata
-        cd repo-rpm/x86_64
+        cd repo/${{ env.arch }}
         createrepo_c --update .
 
         # optional GPG signing of repomd.xml
@@ -260,33 +296,21 @@ runs:
           gpg --export --armor "${{ inputs.gpg_keyid }}" > "RPM-GPG-KEY-$REPO_NAME"
         fi
 
-        # upload everything back
-        cd ..
-        rsync -avz -e "ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          repo-rpm/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/rpm/"
-        echo "✅ RPM repository published successfully"
-
     - name: Publish Pacman repo
-      if: ${{ inputs.format == 'pacman' }}
+      if: inputs.format == 'pacman'
       shell: sh
       run: |
         pacman -Sy --noconfirm rsync pacman-contrib gnupg || true
+        mkdir repo/${{ env.arch }} || true
 
-        mkdir -p repo-pacman/x86_64
-        rsync -avz -e "ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/pacman/" repo-pacman/ || true
-
-        # Copy in new packages
-        for pkg in ${{ inputs.source }}; do
-          [ -f "$pkg" ] && cp "$pkg" repo-pacman/x86_64/
+        cd repo
+        for file in $(ls *.tar.zst*); do
+          mv $file ${{ env.arch }}
         done
-
-        cd repo-pacman/x86_64 || exit 1
 
         REPO_NAME=${{ inputs.repo_name || 'ttypt' }}
         echo "Updating Pacman repo '$REPO_NAME'..."
 
-        # Import GPG key if provided
         if [ -n "${{ inputs.gpg_key }}" ]; then
           mkdir -p "$HOME/.gnupg"
           chmod 700 "$HOME/.gnupg"
@@ -296,6 +320,7 @@ runs:
           GPG_OPTS=""
         fi
 
+        cd ${{ env.arch }}
         for pkg in *.pkg.tar.*; do
           case "$pkg" in
             *.asc|*.sig) continue ;;  # skip detached signatures
@@ -305,10 +330,8 @@ runs:
 
         eval repo-add $GPG_OPTS "${REPO_NAME}.db.tar.gz" $pkgs
 
-
         ln -sf "${REPO_NAME}.db.tar.gz" "${REPO_NAME}.db"
         ln -sf "${REPO_NAME}.files.tar.gz" "${REPO_NAME}.files"
-
         cd ..
         {
           echo "[${REPO_NAME}]"
@@ -320,72 +343,71 @@ runs:
           gpg --export --armor "${{ inputs.gpg_keyid }}" > "key-${REPO_NAME}.pub"
         fi
 
-        cd ..
-        echo "Syncing Pacman repository..."
-        rsync -avz -e "ssh -i $HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          repo-pacman/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/pacman/"
-        echo "✅ Pacman repository '${REPO_NAME}' published successfully"
-
     - name: Publish macOS repo
-      if: ${{ inputs.format == 'brew' }}
+      if: inputs.format == 'brew'
       shell: sh
       run: |
-        # Prepare SSH + local repo mirror
-        mkdir -p "/$HOME/.ssh"
-        chmod 700 "/$HOME/.ssh"
-        ssh-keyscan -H ${{ inputs.host }} >> "/$HOME/.ssh/known_hosts"
-        mkdir -p repo-brew
-        rsync -avz -e "ssh -i /$HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/brew/" repo-brew/ || true
-
-        # Choose version from tag; fallback to date if needed
-        VERSION="${GITHUB_REF_NAME#v}"
-        [ -n "$VERSION" ] || VERSION="$(date -u +%Y.%m.%d)"
-
-        # Create structure and copy artifacts (skip signatures)
-        mkdir -p "repo-brew/versions/$VERSION" "repo-brew/universal" "repo-brew/arm64" "repo-brew/x86_64"
-
-        COUNT=0
-        for f in ${{ inputs.source }}; do
-          case "$f" in
-            *.asc|*.sig) continue ;;
-          esac
-          [ -f "$f" ] || continue
-          base=$(basename "$f")
-          cp "$f" "repo-brew/versions/$VERSION/$base"
-          case "$base" in
-            *universal*) cp "$f" repo-brew/universal/ ;;
-            *arm64*)     cp "$f" repo-brew/arm64/ ;;
-            *x86_64*)    cp "$f" repo-brew/x86_64/ ;;
-            *.pkg)       cp "$f" repo-brew/universal/ ;;   # plain .pkg -> universal bucket
-          esac
-          COUNT=$((COUNT+1))
-        done
-
-        if [ "$COUNT" -eq 0 ]; then
-          echo "No macOS artifacts found to publish"; exit 0
-        fi
-
-        ( cd "repo-brew/versions/$VERSION" && \
-          sha256sum * > SHA256SUMS )
+        ( cd "repo" && \
+          sha256sum `find . -type f` > SHA256SUMS )
 
         if [ -n "${{ inputs.gpg_key }}" ]; then
           mkdir -p "/$HOME/.gnupg"
           chmod 700 "/$HOME/.gnupg"
           echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
-          ( cd "repo-brew/versions/$VERSION" && \
+          ( cd "repo/versions/${{ env.VERSION }}" && \
             gpg --batch --yes --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
                 --detach-sign --armor -u "${{ inputs.gpg_keyid }}" SHA256SUMS || true )
           # publish pubkey for users
-          gpg --export --armor "${{ inputs.gpg_keyid }}" > repo-brew/key.pub || true
+          gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/key.pub || true
         fi
 
-        ( cd repo-brew && rm -f latest && ln -s "versions/$VERSION" latest )
+    - name: Generate formula (BREW)
+      if: inputs.format == 'brew'
+      run: |
+        FORMULA_PATH="${{ inputs.name }}.rb"
+        prefix="${{ inputs.name }}-${{ env.VERSION }}-macos"
+        find repo -type f -name "*.tar.gz"
+        for f in $( find repo -type f -name "*.tar.gz"); do
+          shasum -a 256 $f | cut -d' ' -f1 > $f.sha
+        done
 
-        rsync -avz -e "ssh -i /$HOME/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
-          repo-brew/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/brew/"
+        CLASS_NAME="$(echo "${{ inputs.name }}" | perl -pe 's/(?:^|_)([a-z])/\u$1/g')"
 
-        echo "✅ macOS distribution published (versions/$VERSION, latest → $VERSION)"
+        {
+          echo "class ${CLASS_NAME} < Formula"
+          echo "  desc \"${{ inputs.name }} binary package\""
+          echo "  homepage \"https://github.com/${{ github.repository }}\""
+          URL_PREFIX="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/$prefix"
+          echo "  if Hardware::CPU.arm?"
+          echo "    url \"$URL_PREFIX-arm64.tar.gz\""
+          echo "    sha256 \"$(cat repo/$prefix-arm64.tar.gz.sha)\""
+          echo "  else"
+          echo "    url \"$URL_PREFIX-x86_64.tar.gz\""
+          echo "    sha256 \"$(cat repo/$prefix-x86_64.tar.gz.sha)\""
+          echo "  end"
+          echo "  version \"${{ env.VERSION }}\""
+
+          deps="${{ inputs.deps_brew || inputs.deps }}"
+          # Add dependencies if defined
+          if [ -n "$deps" ]; then
+            for dep in $(echo "$deps" | tr ',' ' '); do
+              echo "  depends_on \"$dep\""
+            done
+          fi
+          echo ""
+          echo "  def install"
+          echo "    prefix.install Dir[\"*\"]"
+          echo "  end"
+          echo ""
+          echo "  test do"
+          echo "    system \"true\""
+          echo "  end"
+          echo "end"
+        } > "$FORMULA_PATH"
+
+        echo "Generated Homebrew formula:"
+        cat "$FORMULA_PATH"
+      shell: sh
 
     - name: Push formula to tty-pt/tap
       if: inputs.format == 'brew'
@@ -397,12 +419,59 @@ runs:
 
         git clone --depth=1 "$TAP_REPO" "$TAP_DIR"
         mkdir -p "$TAP_DIR/Formula"
-        cp dist-brew/*.rb "$TAP_DIR/Formula/"
+        cp *.rb "$TAP_DIR/Formula/"
 
         cd "$TAP_DIR"
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add Formula/*.rb
-        git commit -m "Update ${NAME:-${{ inputs.name }}} to v${VERSION:-${{ github.ref_name }}}" || true
+        git commit -m "Update ${{ inputs.name }}} to v${{ env.VERSION}}:-${{ github.ref_name }}" || true
         git push origin main || echo "No changes to push."
       shell: bash
+
+    - name: Update repo
+      if: inputs.format != 'openbsd'
+      shell: sh
+      run: |
+        echo "Syncing repository..."
+        rsync -avz -e "ssh -F $HOME/.ssh/config" \
+          repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ inputs.format }}/"
+
+    - name: Publish OpenBSD repo
+      if: inputs.format == 'openbsd'
+      shell: sh
+      run: |
+        echo "🦫 Publishing OpenBSD packages..."
+
+        REL=$(ssh -F "$HOME/.ssh/config" ${{ inputs.host }} "uname -r")
+        ARCH=$(ssh -F "$HOME/.ssh/config" ${{ inputs.host }} "uname -m")
+        TARGET="/var/www/htdocs/openbsd/$REL/packages/$ARCH"
+
+        scp -F $HOME/.ssh/config \
+        ./dist/${{ env.iden }}/${{ inputs.name }}-${{ env.VERSION}}-openbsd-${{ env.arch }}.tgz \
+          ${{ inputs.host }}:$TARGET/${{ inputs.name }}-${{ env.VERSION }}.tgz
+
+        scp -F $HOME/.ssh/config \
+        ./dist/${{ env.iden }}/${{ inputs.name }}-${{ env.VERSION}}-openbsd-${{ env.arch }}.tgz.sig \
+          ${{ inputs.host }}:$TARGET/${{ inputs.name }}-${{ env.VERSION }}.tgz.sig
+
+        LOCAL="/var/www/var/ci-chroot/tmp/"
+        ssh -F "$HOME/.ssh/config" ${{ inputs.host }} <<EOF
+          set -e
+          cd $TARGET
+          echo 🧾 Generating package index...
+          rm -f index.txt
+          ls -nlT >index.txt
+
+          chmod 644 index.txt
+          sha256 -b *.tgz > SHA256
+          signify -S -s /etc/signify/openbsd-76-ttypt.sec -m SHA256 -x SHA256.sig
+
+          cp ${{ inputs.name }}-${{ env.VERSION }}.tgz* $LOCAL
+          cd $LOCAL
+          ls -al
+          sha256 -b *.tgz > SHA256
+          signify -S -s /etc/signify/openbsd-76-ttypt.sec -m SHA256 -x SHA256.sig
+
+          echo "✅ OpenBSD package index created at $TARGET/index.txt"
+        EOF
