@@ -1,12 +1,7 @@
 # Install tty.pt packages
+We distribute our packages for the different package managers and different operating systems. Follow these instructions to easily get them working in your computer.
 
 ## Any
-
-### From Source:
-```sh
-make
-sudo make install
-```
 
 ## Linux
 
@@ -45,7 +40,7 @@ Then it's just:
 apk add <package-name>
 ```
 
-### pacman (Arch Linux, Etc)
+### pacman (Arch Linux, Windows/Msys, Etc)
 At least once in your life you need to:
 ```sh
 # Add the repository to pacman.conf
@@ -86,15 +81,24 @@ sudo dnf install <package>
 sudo yum install <package>
 ```
 
-## macos
-
-### Manual installation
+## Brew (MacOS)
 ```sh
-tar xzf <package>-<version>-macos-arm64.tar.gz
-sudo cp -r stage/* /usr/local/
+brew tap tty-pt/tap https://github.com/tty-pt/tap.git
+brew install <package>
 ```
 
-### Package installation  
+## OpenBSD
 ```sh
-sudo installer -pkg <package>-<version>-arm64.pkg -target /
+SUFFIX=$(uname -r)/packages/$(uname -m)
+MY="https://tty.pt/openbsd/$SUFFIX/"
+OFF="$(cat /etc/installurl)/$SUFFIX/"
+TRUSTED_PKG_PATH="$MY" PKG_PATH="$OFF" doas pkg_add -DIu <package>
 ```
+
+### Building from Source:
+```sh
+git clone https://github.com/tty-pt/mk.git ../mk
+make
+sudo make install
+```
+You'll need to manually install any dependencies in order to be able to run the project, in this case.

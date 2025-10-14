@@ -99,6 +99,9 @@ runs:
         arch="$(uname -m)"
         echo "arch=$arch" >> $GITHUB_ENV
         echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
+        ofilep=${{ inputs.name }}-$VERSION-${{ inputs.format }}
+        echo "ofilep=$ofilep" >> $GITHUB_ENV
+        echo "ofile=$ofilep-$arch" >> $GITHUB_ENV
       shell: sh
 
     - name: Download APK artifacts
@@ -300,9 +303,6 @@ runs:
       if: inputs.format == 'pacman'
       shell: sh
       run: |
-        pacman -Sy --noconfirm rsync pacman-contrib gnupg || true
-        mkdir repo/${{ env.arch }} || true
-
         cd repo
         for file in $(ls *.tar.zst*); do
           mv $file ${{ env.arch }}
@@ -365,7 +365,6 @@ runs:
       if: inputs.format == 'brew'
       run: |
         FORMULA_PATH="${{ inputs.name }}.rb"
-        prefix="${{ inputs.name }}-${{ env.VERSION }}-macos"
         find repo -type f -name "*.tar.gz"
         for f in $( find repo -type f -name "*.tar.gz"); do
           shasum -a 256 $f | cut -d' ' -f1 > $f.sha
@@ -377,13 +376,13 @@ runs:
           echo "class ${CLASS_NAME} < Formula"
           echo "  desc \"${{ inputs.name }} binary package\""
           echo "  homepage \"https://github.com/${{ github.repository }}\""
-          URL_PREFIX="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/$prefix"
+          URL_PREFIX="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${{ env.ofilep }}"
           echo "  if Hardware::CPU.arm?"
           echo "    url \"$URL_PREFIX-arm64.tar.gz\""
-          echo "    sha256 \"$(cat repo/$prefix-arm64.tar.gz.sha)\""
+          echo "    sha256 \"$(cat repo/$ofilep-arm64.tar.gz.sha)\""
           echo "  else"
           echo "    url \"$URL_PREFIX-x86_64.tar.gz\""
-          echo "    sha256 \"$(cat repo/$prefix-x86_64.tar.gz.sha)\""
+          echo "    sha256 \"$(cat repo/$ofilep-x86_64.tar.gz.sha)\""
           echo "  end"
           echo "  version \"${{ env.VERSION }}\""
 
@@ -448,11 +447,11 @@ runs:
         TARGET="/var/www/htdocs/openbsd/$REL/packages/$ARCH"
 
         scp -F $HOME/.ssh/config \
-        ./dist/${{ env.iden }}/${{ inputs.name }}-${{ env.VERSION}}-openbsd-${{ env.arch }}.tgz \
+        ./dist/${{ env.iden }}/${{ env.ofile }}.tgz \
           ${{ inputs.host }}:$TARGET/${{ inputs.name }}-${{ env.VERSION }}.tgz
 
         scp -F $HOME/.ssh/config \
-        ./dist/${{ env.iden }}/${{ inputs.name }}-${{ env.VERSION}}-openbsd-${{ env.arch }}.tgz.sig \
+        ./dist/${{ env.iden }}/${{ env.ofile }}.tgz.sig \
           ${{ inputs.host }}:$TARGET/${{ inputs.name }}-${{ env.VERSION }}.tgz.sig
 
         LOCAL="/var/www/var/ci-chroot/tmp/"

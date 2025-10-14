@@ -23,16 +23,6 @@ priority=1
 EOF
 
 
-# Your repo + fallback to Rocky
-RUN cat > /etc/yum.repos.d/ttypt.repo <<'EOF'
-[ttypt]
-name=tty.pt repo
-baseurl=https://tty.pt/rpm/$basearch
-enabled=1
-gpgcheck=0
-priority=1
-EOF
-
 # RUN cat > /etc/yum.repos.d/Rocky-BaseOS.repo <<'EOF'
 # [baseos]
 # name=Rocky Linux 9 - BaseOS
@@ -41,13 +31,13 @@ EOF
 # enabled=1
 # EOF
 
-# RUN cat > /etc/yum.repos.d/Rocky-AppStream.repo <<'EOF'
-# [appstream]
-# name=Rocky Linux 9 - AppStream
-# baseurl=https://dl.rockylinux.org/pub/rocky/9/AppStream/$basearch/os/
-# gpgcheck=0
-# enabled=1
-# EOF
+RUN cat > /etc/yum.repos.d/Rocky-AppStream.repo <<'EOF'
+[appstream]
+name=Rocky Linux 9 - AppStream
+baseurl=https://dl.rockylinux.org/pub/rocky/9/AppStream/$basearch/os/
+gpgcheck=0
+enabled=1
+EOF
 
 RUN cat > /etc/yum.repos.d/Rocky-CRB.repo <<'EOF'
 [crb]
@@ -61,7 +51,8 @@ EOF
 # 🔧 Ferramentas base
 # ------------------------------------------------------------
 
-RUN microdnf -y makecache && \
+RUN microdnf -y install epel-release && \
+    microdnf -y makecache && \
     microdnf -y update && \
     microdnf -y install \
         git \

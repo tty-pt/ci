@@ -117,11 +117,13 @@ runs:
     - name: Prepare enviroment vars
       id: mkenv
       run: |
-        echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+        VERSION=${GITHUB_REF_NAME#v}
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
         echo "PREFIX=/usr" >> $GITHUB_ENV
         arch="$(uname -m)"
         echo "arch=$arch" >> $GITHUB_ENV
         echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
+        echo "ofile=${{ inputs.name }}-$VERSION-${{ inputs.format }}-$arch" >> $GITHUB_ENV
       shell: sh
 
     - name: Add Repo (APK)
@@ -199,6 +201,12 @@ runs:
         deps="${{ inputs.deps_rpm || inputs.deps }}"
         echo "deps=$deps" > $GITHUB_ENV
 
+        microdnf repolist $dep
+        if [ -n "$deps" ]; then
+          for dep in $(echo "$deps" | tr ',' ' '); do
+            microdnf repoquery $dep
+          done
+        fi
         test ! -n "$deps" || microdnf install -y \
                          $(echo "$deps" | tr ',' ' ')
       shell: sh
@@ -252,14 +260,15 @@ runs:
 
         ssh -F $HOME/.ssh/config ${{ inputs.host }} doas /usr/local/sbin/ci-chroot <<'EOF'
         set -eu
-        REL=$(uname -r)
-        ARCH=$(uname -m)
-        MY="file:///tmp"
-        OFF="https://mirror.leaseweb.com/pub/OpenBSD/$REL/packages/$ARCH/"
+        SUFFIX=$(uname -r)/packages/$(uname -m)
+        MY="https://tty.pt/openbsd/$SUFFIX/"
+        OFF="$(cat /etc/installurl)/$SUFFIX/"
+        stage=stage-${{ env.iden }}
 
         deps="$(echo ${{ env.deps }} | tr ',' ' ')"
-        pkg_delete -I $deps || true
         echo "📦 Installing dependencies '$deps'..."
+        echo "My: $MY"
+        echo "Off: $OFF"
         if test ! -z "$deps"; then
           TRUSTED_PKG_PATH="$MY" PKG_PATH="$OFF" \
             pkg_add -DIu $deps
@@ -268,18 +277,19 @@ runs:
 
         cd /usr/src
 
-        rm -rf ${{ inputs.name }} mk stage || true
-        mkdir -p ${{ inputs.name }} stage dist-openbsd
+        echo mkdir -p ${{ inputs.name }} dist-openbsd $stage
+        mkdir -p ${{ inputs.name }} dist-openbsd $stage
 
         echo "📦 Extracting source archive..."
         tar xzf ${{ inputs.name }}.tar.gz
+        rm ${{ inputs.name }}.tar.gz
 
         cd ${{ inputs.name }}
         pwd
 
         make
-        make DESTDIR=../stage install
-        cd ../stage
+        make DESTDIR=../$stage install
+        cd ../$stage
 
         pwd
         find usr -type f
@@ -311,6 +321,7 @@ runs:
         This is an automatically built package.
         DESC
 
+        obsd_file=${{ inputs.name }}-${{ env.VERSION }}.tgz
         # Create the package using the staging directory
         pkg_create \
           -B . \
@@ -320,22 +331,38 @@ runs:
           -D FULLPKGPATH="${{ inputs.name }}" \
           -D MAINTAINER="repo@tty.pt" \
           -p / \
-          ../dist-openbsd/${{ inputs.name }}-${{ env.VERSION }}.tgz
+          ../dist-openbsd/$obsd_file
+
+        if test ! -z "$deps"; then
+          pkg_delete -I $deps || true
+        fi
 
         cd ../dist-openbsd/
 
         signify -S -s /etc/signify/openbsd-76-ttypt.sec \
-          -m ${{ inputs.name }}-${{ env.VERSION }}.tgz \
-          -x ${{ inputs.name }}-${{ env.VERSION }}.tgz.sig
+          -m $obsd_file -x $obsd_file.sig
+
+        mv $obsd_file ${{ env.ofile }}.tgz
+        mv $obsd_file.sig ${{ env.ofile }}.tgz.sig
+
+        rm DESC PLIST
 
         echo "✅ Package built:"
         ls -lh
         EOF
 
-        mkdir ${{ env.iden }}
-        scp -F $HOME/.ssh/config ${{ inputs.host }}:/var/www/var/ci-chroot/usr/src/dist-openbsd/${{ inputs.name }}-${{ env.VERSION }}.tgz ${{ env.iden }}/${{ inputs.name }}-${{ env.VERSION }}-${{ inputs.format }}-${{ env.arch }}.tgz
 
-        scp -F $HOME/.ssh/config ${{ inputs.host }}:/var/www/var/ci-chroot/usr/src/dist-openbsd/${{ inputs.name }}-${{ env.VERSION }}.tgz.sig ${{ env.iden }}/${{ inputs.name }}-${{ env.VERSION }}-${{ inputs.format }}-${{ env.arch }}.tgz.sig
+        mkdir ${{ env.iden }}
+        scp -F $HOME/.ssh/config ${{ inputs.host }}:/var/www/var/ci-chroot/usr/src/dist-openbsd/${{ env.ofile }}.tgz ${{ env.iden }}/
+        scp -F $HOME/.ssh/config ${{ inputs.host }}:/var/www/var/ci-chroot/usr/src/dist-openbsd/${{ env.ofile }}.tgz.sig ${{ env.iden }}/
+
+        ssh -F $HOME/.ssh/config ${{ inputs.host }} doas /usr/local/sbin/ci-chroot <<'EOF'
+        cd /usr/src/
+        rm -rf mk ${{ inputs.name }} \
+          dist-openbsd/${{ env.ofile }}.tgz \
+          dist-openbsd/${{ env.ofile }}.tgz.sig \
+          stage-${{ env.iden }}
+        EOF
 
     - name: Prepare builder for APK
       if: inputs.format == 'apk' || inputs.format == 'pacman'
@@ -368,8 +395,8 @@ runs:
           PREFIX=${{ env.prefix }} install
 
         mkdir -p ${{ env.iden }}
-        TAR="${{ env.iden }}/${{ inputs.name }}-${{ env.VERSION }}-macos-${arch}.tar.gz"
-        PKG="${{ env.iden }}/${{ inputs.name }}-${{ env.VERSION }}-macos-${arch}.pkg"
+        TAR="${{ env.iden }}/${{ env.ofile }}.tar.gz"
+        PKG="${{ env.iden }}/${{ env.ofile }}.pkg"
 
         echo "📦 Creating $TAR"
         tar -czf "$TAR" -C "stage/$arch" .
@@ -560,6 +587,8 @@ runs:
           || echo "${{ env.PREFIX }}/include/*" >> $SPEC
         test ! -d stage/usr/bin \
           || echo "${{ env.PREFIX }}/bin/*" >> $SPEC
+        test ! -d stage/usr/share \
+          || echo "${{ env.PREFIX }}/share/*" >> $SPEC
 
         echo ""                           >> $SPEC
         echo "%changelog"                 >> $SPEC
