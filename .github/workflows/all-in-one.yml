@@ -43,10 +43,15 @@ on:
         required: false
         default: ''
         type: string
+      deps_msys:
+        description: 'Msys dependency names'
+        required: false
+        default: ''
+        type: string
       publish_to:
         description: "Package managers to publish to"
         required: false
-        default: "deb,apk,pacman,rpm,brew,openbsd"
+        default: "deb,apk,pacman,rpm,brew,openbsd,msys"
         type: string
       repo_name:
         description: "Repository name for pacman and RPM"
@@ -74,126 +79,117 @@ on:
         required: false
 
 jobs:
-  package-deb:
-    if: contains(inputs.publish_to, 'deb')
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/tty-pt/ubuntu-builder:latest
-    steps:
-    - name: Package APT
-      uses: tty-pt/ci/package@main
-      with:
-        name: ${{ inputs.name }}
-        format: 'deb'
-        deps: ${{ inputs.deps }}
-        deps_deb: ${{ inputs.deps_deb }}
-        gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
-        gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-        gpg_keyid: ${{ secrets.GPG_KEYID }}
+  package:
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image || null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: deb
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/ubuntu-builder:latest
+          - format: apk
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/alpine-builder:latest
+          - format: pacman
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/arch-builder:latest
+          - format: rpm
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/rocky-builder:latest
+          - format: msys
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/msys-builder:latest
+          - format: openbsd
+            runner: ubuntu-latest
+          - format: brew
+            arch: arm64
+            runner: macos-latest
+          - format: brew
+            arch: x86_64
+            runner: macos-13
 
-  package-apk:
-    if: contains(inputs.publish_to, 'apk')
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/tty-pt/alpine-builder:latest
     steps:
-    - name: Package APK
-      uses: tty-pt/ci/package@main
-      with:
-        name: ${{ inputs.name }}
-        format: 'apk'
-        deps: ${{ inputs.deps }}
-        deps_apk: ${{ inputs.deps_apk }}
-        abuild_key: ${{ secrets.ABUILD_PRIVATE_KEY }}
-        abuild_pub: ${{ secrets.ABUILD_PUBLIC_KEY }}
-
-  package-pacman:
-    if: contains(inputs.publish_to, 'pacman')
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/tty-pt/arch-builder:latest
-    steps:
-    - name: Package PACMAN
-      uses: tty-pt/ci/package@main
-      with:
-        name: ${{ inputs.name }}
-        format: 'pacman'
-        ext: 'pkg.tar.*'
-        deps: ${{ inputs.deps }}
-        deps_pacman: ${{ inputs.deps_pacman }}
-        gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
-        gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-        gpg_keyid: ${{ secrets.GPG_KEYID }}
-
-  package-rpm:
-    if: contains(inputs.publish_to, 'rpm')
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/tty-pt/rocky-builder:latest
-    steps:
-    - name: Package RPM
-      uses: tty-pt/ci/package@main
-      with:
-        name: ${{ inputs.name }}
-        format: 'rpm'
-        deps: ${{ inputs.deps }}
-        deps_rpm: ${{ inputs.deps_rpm }}
-        gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
-        gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-        gpg_keyid: ${{ secrets.GPG_KEYID }}
-
-  package-brew-arm:
-    if: contains(inputs.publish_to, 'brew')
-    runs-on: macos-latest
-    steps:
-    - name: Package macOS
-      uses: tty-pt/ci/package@main
-      with:
-        name: ${{ inputs.name }}
-        format: 'brew'
-        deps: ${{ inputs.deps }}
-        deps_brew: ${{ inputs.deps_brew }}
-
-  package-brew-x86:
-    if: contains(inputs.publish_to, 'brew')
-    runs-on: macos-13
-    steps:
-      - name: Package macOS (x86_64)
-        uses: tty-pt/ci/package@main
+      - name: Package for ${{ matrix.format }} (${{ matrix.arch || 'default' }})
+        if: contains(inputs.publish_to, matrix.format)
+        uses: tty-pt/ci/package@msys
         with:
           name: ${{ inputs.name }}
-          format: 'brew'
+          format: ${{ matrix.format }}
+          ext: ${{ (matrix.format == 'pacman' || matrix.format == 'msys') && 'pkg.tar.*' || '' }}
           deps: ${{ inputs.deps }}
-          deps_brew: ${{ inputs.deps_brew }}
+          deps_deb: ${{ inputs.deps_deb || '' }}
+          deps_apk: ${{ inputs.deps_apk || '' }}
+          deps_pacman: ${{ inputs.deps_pacman || '' }}
+          deps_rpm: ${{ inputs.deps_rpm || '' }}
+          deps_msys: ${{ inputs.deps_msys || '' }}
+          deps_brew: ${{ inputs.deps_brew || '' }}
+          deps_openbsd: ${{ inputs.deps_openbsd || '' }}
+          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+          gpg_keyid: ${{ secrets.GPG_KEYID }}
+          abuild_key: ${{ secrets.ABUILD_PRIVATE_KEY || '' }}
+          abuild_pub: ${{ secrets.ABUILD_PUBLIC_KEY || '' }}
+          host: ${{ secrets.HOST || '' }}
+          user: ${{ secrets.USER || '' }}
+          ssh_key: ${{ secrets.SSH_KEY || '' }}
 
-  package-openbsd:
-    if: contains(inputs.publish_to, 'openbsd')
-    runs-on: ubuntu-latest
+  publish:
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image || null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: deb
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/ubuntu-builder:latest
+          - format: apk
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/alpine-builder:latest
+          - format: pacman
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/arch-builder:latest
+          - format: rpm
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/rocky-builder:latest
+          - format: msys
+            runner: ubuntu-latest
+            image: ghcr.io/tty-pt/msys-builder:latest
+          - format: openbsd
+            runner: ubuntu-latest
+          - format: brew
+            arch: arm64
+            runner: macos-latest
+          - format: brew
+            arch: x86_64
+            runner: macos-13
+
     steps:
-    - name: Package OpenBSD
-      uses: tty-pt/ci/package@main
-      with:
-        name: ${{ inputs.name }}
-        format: 'openbsd'
-        deps: ${{ inputs.deps }}
-        deps_openbsd: ${{ inputs.deps_openbsd }}
-        gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
-        gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-        gpg_keyid: ${{ secrets.GPG_KEYID }}
-        host: ${{ secrets.HOST }}
-        user: ${{ secrets.USER }}
-        ssh_key: ${{ secrets.SSH_KEY }}
+      - name: Publish ${{ matrix.format }}
+        if: contains(inputs.publish_to, matrix.format)
+        uses: tty-pt/ci/publish@msys
+        with:
+          name: ${{ inputs.name }}
+          format: ${{ matrix.format }}
+          source: '*-${{ matrix.format }}-*/*'
+          host: ${{ secrets.HOST }}
+          user: ${{ secrets.USER }}
+          ssh_key: ${{ secrets.SSH_KEY }}
+          deps: ${{ inputs.deps || '' }}
+          deps_brew: ${{ inputs.deps_brew || '' }}
+          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg_keyid: ${{ secrets.GPG_KEYID }}
+          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+          abuild_key: ${{ secrets.ABUILD_PRIVATE_KEY || '' }}
+          abuild_pub: ${{ secrets.ABUILD_PUBLIC_KEY || '' }}
+          tap_token: ${{ secrets.TAP_TOKEN || '' }}
 
   release:
     runs-on: ubuntu-latest
-    needs:
-      - package-pacman
-      - package-rpm
-      - package-apk
-      - package-deb
-      - package-brew-arm
-      - package-brew-x86
-      - package-openbsd
+    needs: package
     if: always() && startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Create and publish GitHub Release
@@ -202,119 +198,3 @@ jobs:
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_keyid: ${{ secrets.GPG_KEYID }}
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-
-  publish-deb:
-    if: contains(inputs.publish_to, 'deb')
-    runs-on: ubuntu-latest
-    needs: [package-deb]
-    steps:
-      - name: Publish APT repository
-        uses: tty-pt/ci/publish@main
-        with:
-          name: ${{ inputs.name }}
-          format: 'deb'
-          source: '*-deb-*/*'
-          host: ${{ secrets.HOST }}
-          user: ${{ secrets.USER }}
-          ssh_key: ${{ secrets.SSH_KEY }}
-          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          gpg_keyid: ${{ secrets.GPG_KEYID }}
-          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-
-  publish-apk:
-    if: contains(inputs.publish_to, 'apk')
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/tty-pt/alpine-builder:latest
-    needs: [package-apk]
-    steps:
-      - name: Publish APK repository
-        uses: tty-pt/ci/publish@main
-        with:
-          name: ${{ inputs.name }}
-          format: 'apk'
-          source: '*-apk-*/*'
-          host: ${{ secrets.HOST }}
-          user: ${{ secrets.USER }}
-          ssh_key: ${{ secrets.SSH_KEY }}
-          abuild_key: ${{ secrets.ABUILD_PRIVATE_KEY }}
-          abuild_pub: ${{ secrets.ABUILD_PUBLIC_KEY }}
-
-  publish-rpm:
-    if: contains(inputs.publish_to, 'rpm')
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/tty-pt/rocky-builder:latest
-    needs: [package-rpm]
-    steps:
-      - name: Publish RPM repository
-        uses: tty-pt/ci/publish@main
-        with:
-          name: ${{ inputs.name }}
-          format: 'rpm'
-          source: '*-rpm-*/*'
-          host: ${{ secrets.HOST }}
-          user: ${{ secrets.USER }}
-          ssh_key: ${{ secrets.SSH_KEY }}
-          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          gpg_keyid: ${{ secrets.GPG_KEYID }}
-          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-
-  publish-pacman:
-    if: contains(inputs.publish_to, 'pacman')
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/tty-pt/arch-builder:latest
-    needs: [package-pacman]
-    steps:
-      - name: Publish RPM repository
-        uses: tty-pt/ci/publish@main
-        with:
-          name: ${{ inputs.name }}
-          format: 'pacman'
-          source: '*-pacman-*/*'
-          host: ${{ secrets.HOST }}
-          user: ${{ secrets.USER }}
-          ssh_key: ${{ secrets.SSH_KEY }}
-          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          gpg_keyid: ${{ secrets.GPG_KEYID }}
-          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-
-  publish-brew:
-    if: contains(inputs.publish_to, 'brew')
-    runs-on: ubuntu-latest
-    needs:
-      - package-brew-arm
-      - package-brew-x86
-    steps:
-      - name: Publish macOS distribution
-        uses: tty-pt/ci/publish@main
-        with:
-          name: ${{ inputs.name }}
-          format: 'brew'
-          source: '*-brew-*/*'
-          deps: ${{ inputs.deps }}
-          deps_brew: ${{ inputs.deps_brew }}
-          host: ${{ secrets.HOST }}
-          user: ${{ secrets.USER }}
-          ssh_key: ${{ secrets.SSH_KEY }}
-          gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          gpg_keyid: ${{ secrets.GPG_KEYID }}
-          gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
-          tap_token: ${{ secrets.TAP_TOKEN }}
-
-  publish-openbsd:
-    if: contains(inputs.publish_to, 'openbsd')
-    runs-on: ubuntu-latest
-    needs:
-      - package-openbsd
-    steps:
-      - name: Publish OpenBSD distribution
-        uses: tty-pt/ci/publish@main
-        with:
-          name: ${{ inputs.name }}
-          format: 'openbsd'
-          source: '*-openbsd-*/*'
-          host: ${{ secrets.HOST }}
-          user: ${{ secrets.USER }}
-          ssh_key: ${{ secrets.SSH_KEY }}

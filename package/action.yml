@@ -45,6 +45,10 @@ inputs:
     description: 'OpenBSD dependency names'
     required: false
     default: ''
+  deps_msys:
+    description: 'Msys dependency names'
+    required: false
+    default: ''
   abuild_key:
     description: 'ABUILD key'
     required: false
@@ -119,7 +123,14 @@ runs:
       run: |
         VERSION=${GITHUB_REF_NAME#v}
         echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "PREFIX=/usr" >> $GITHUB_ENV
+
+        # Set PREFIX based on format
+        if [ "${{ inputs.format }}" = "msys" ]; then
+          echo "PREFIX=/mingw64" >> $GITHUB_ENV
+        else
+          echo "PREFIX=/usr" >> $GITHUB_ENV
+        fi
+
         arch="$(uname -m)"
         echo "arch=$arch" >> $GITHUB_ENV
         echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
@@ -142,18 +153,19 @@ runs:
       shell: sh
 
     - name: Add Repo (PACMAN)
-      if: inputs.format == 'pacman'
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
       shell: sh
       run: |
-        REPO_NAME="ttypt"
+        REPO_NAME="ttypt-${{ inputs.format }}"
         REPO_CONF="/etc/pacman.conf"
-        URL="https://tty.pt/pacman/x86_64/ttypt.db"
+        URL="https://tty.pt/${{ inputs.format }}/x86_64/$REPO_NAME.db"
+        cat /etc/pacman.conf
         if curl -sSf --http1.1 --ipv4 --connect-timeout 3 --max-time 6 -r 0-0 -o /dev/null "$URL"; then
           {
             echo ""
             echo "[${REPO_NAME}]"
             echo "SigLevel = Never"
-            echo "Server = https://tty.pt/pacman/\$arch"
+            echo "Server = https://tty.pt/${{ inputs.format }}/\$arch"
           } | tee -a "$REPO_CONF"
           echo "✓ Added custom $REPO_NAME repo to pacman.conf"
         fi
@@ -212,12 +224,16 @@ runs:
       shell: sh
 
     - name: Install prerequisites (PACMAN)
-      if: inputs.format == 'pacman'
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
       run: |
-        deps="${{ inputs.deps_pacman || inputs.deps }}"
+        if test "${{ inputs.format }}" = "pacman"; then
+          deps="${{ inputs.deps_pacman || inputs.deps }}"
+        else
+          deps="${{ inputs.deps_msys || inputs.deps }}"
+        fi
         echo "deps=$deps" > $GITHUB_ENV
 
-        pacman -Sy --noconfirm base-devel git tar gzip zstd
+        pacman -Sy --noconfirm base-devel git tar gzip zstd zip
         if [ -n "$deps" ]; then
           pacman -S --noconfirm $(echo "$deps" | tr ',' ' ')
         fi
@@ -236,6 +252,7 @@ runs:
           done
         fi
       shell: sh
+
 
     - name: Fetch include.mk from tty-pt/mk
       run: |
@@ -378,9 +395,11 @@ runs:
       if: inputs.format != 'brew' && inputs.format != 'openbsd'
       run: |
         export PATH="/usr/bin:/bin:$PATH"
+        test "${{ inputs.format }}" != "msys" || export cross=Msys
 
+        find /usr/mingw64 -type f || true
         make
-        make DESTDIR=$PWD/stage PREFIX=${{ env.PREFIX }} install
+        make DESTDIR=$PWD/stage install
       shell: sh
 
     - name: Build and stage project
@@ -426,7 +445,7 @@ runs:
       shell: sh
 
     - name: Import abuild key
-      if: inputs.abuild_key != ''
+      if: inputs.abuild_key != '' && inputs.format == 'apk'
       run: |
         mkdir -p /home/builder/.abuild
         echo "${{ inputs.abuild_key }}" > /home/builder/.abuild/ttypt.rsa
@@ -440,8 +459,8 @@ runs:
         chown -R builder:builder /home/builder/.abuild
       shell: sh
 
-    - name: Generate PKGBUILD
-      if: inputs.format == 'pacman'
+    - name: Generate PKGBUILD (PACMAN + MSYS)
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
       shell: sh
       run: |
         {
@@ -465,8 +484,8 @@ runs:
           echo "}"
         } > PKGBUILD
 
-    - name: Build package (PACMAN)
-      if: inputs.format == 'pacman'
+    - name: Build package (PACMAN + MSYS)
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
       run: |
         mkdir -p ${{ env.iden }}
         chown -R builder:builder "$PWD"
@@ -477,6 +496,32 @@ runs:
           mkdir -p ${{ env.iden }}
           mv *.pkg.tar.* ${{ env.iden }} || true
         '
+
+        cd ${{ env.iden }}
+        rm *debug* || true
+        mv *.pkg.tar.zst ${{ env.ofile }}.pkg.tar.zst
+
+        if test "${{ inputs.format }}" = "msys"; then
+          mkdir extracted
+          tar -xaf ${{ env.ofile }}.pkg.tar.zst -C extracted
+          zip -r "${{ env.ofile }}.zip" extracted/*
+
+          bin_dir=$(find extracted -type d -name bin | head -n1)
+          mkdir -p extracted/deps
+          if command -v ldd >/dev/null 2>&1; then
+            for exe in "$bin_dir"/*; do
+              if file "$exe" | grep -q "PE32"; then
+                echo "→ Checking dependencies for $(basename "$exe")"
+                ldd "$exe" | awk '/=> \// {print $3}' | grep -E '\.dll$' | while read -r dll; do
+                  base=$(basename "$dll")
+                  if [ ! -f "extracted/deps/$base" ]; then
+                    cp -n "$dll" "extracted/deps/" 2>/dev/null || true
+                  fi
+                done
+              fi
+            done
+          fi
+        fi
       shell: sh
 
     - name: Generate APKBUILD
@@ -640,9 +685,10 @@ runs:
         ls -l ${{ env.iden }}/
       shell: sh
 
-    - name: Sign package (PACMAN + DEB)
+    - name: Sign package (PACMAN + DEB + MSYS)
       if: (inputs.format == 'pacman'
-        || inputs.format == 'deb')
+        || inputs.format == 'deb'
+        || inputs.format == 'msys')
         && inputs.gpg_key != ''
       run: |
         ext=${{ inputs.ext || inputs.format }}

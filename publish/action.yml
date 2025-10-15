@@ -133,7 +133,14 @@ runs:
         find ../dist -mindepth 2 -maxdepth 2 \
           -path "*-${{ inputs.format }}-*" \
           -exec cp -r {} . \;
-        sha256sum `find . -type f` > SHA256SUMS
+
+        if [ "$(uname)" = "Darwin" ]; then
+          CHECKSUM="shasum -a 256"
+        else
+          CHECKSUM="sha256sum"
+        fi
+
+        $CHECKSUM `find . -type f` > SHA256SUMS
         cd - 2>/dev/null
 
         echo REPO FOLDER INIT
@@ -284,7 +291,8 @@ runs:
 
         # generate .repo file
         cd ..
-        REPO_NAME=${{ inputs.repo_name || 'ttypt' }}
+        REPO_NAME=${{ inputs.repo_name }}
+        test ! -z "$REPO_NAME" || REPO_NAME='ttypt-${{ inputs.format }}'
         {
           echo "[$REPO_NAME]"
           echo "name=$REPO_NAME Repository"
@@ -299,8 +307,8 @@ runs:
           gpg --export --armor "${{ inputs.gpg_keyid }}" > "RPM-GPG-KEY-$REPO_NAME"
         fi
 
-    - name: Publish Pacman repo
-      if: inputs.format == 'pacman'
+    - name: Publish PACMAN / MSYS repo
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
       shell: sh
       run: |
         cd repo
@@ -308,7 +316,10 @@ runs:
           mv $file ${{ env.arch }}
         done
 
-        REPO_NAME=${{ inputs.repo_name || 'ttypt' }}
+        REPO_NAME=${{ inputs.repo_name }}
+        test ! -z "$REPO_NAME" || \
+            REPO_NAME="ttypt-${{ inputs.format }}"
+
         echo "Updating Pacman repo '$REPO_NAME'..."
 
         if [ -n "${{ inputs.gpg_key }}" ]; then
@@ -336,7 +347,7 @@ runs:
         {
           echo "[${REPO_NAME}]"
           echo "SigLevel = Required DatabaseOptional"
-          echo "Server = https://tty.pt/pacman/\$arch"
+          echo "Server = https://tty.pt/${{ inputs.format }}/\$arch"
         } > "${REPO_NAME}.conf"
 
         if [ -n "${{ inputs.gpg_keyid }}" ]; then
@@ -348,7 +359,7 @@ runs:
       shell: sh
       run: |
         ( cd "repo" && \
-          sha256sum `find . -type f` > SHA256SUMS )
+          shasum -a 256 `find . -type f` > SHA256SUMS )
 
         if [ -n "${{ inputs.gpg_key }}" ]; then
           mkdir -p "/$HOME/.gnupg"
