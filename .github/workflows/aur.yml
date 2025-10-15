@@ -1,0 +1,62 @@
+name: Reusable AUR Build and Publish
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: 'Package name to build'
+        required: true
+        type: string
+      deps:
+        description: 'Comma-separated package dependencies'
+        required: false
+        type: string
+    secrets:
+      HOST:
+        required: true
+      USER:
+        required: true
+      SSH_KEY:
+        required: true
+      GPG_PRIVATE_KEY:
+        required: true
+      GPG_KEYID:
+        required: true
+      GPG_PASSPHRASE:
+        required: true
+
+jobs:
+  build-and-publish-one:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/tty-pt/msys-builder:latest
+    env:
+      HOST: ${{ secrets.HOST }}
+      USER: ${{ secrets.USER }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}
+      GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_KEYID: ${{ secrets.GPG_KEYID }}
+      GPG_PASS: ${{ secrets.GPG_PASSPHRASE }}
+
+    steps:
+      - name: Build ${{ inputs.name }}
+        uses: tty-pt/ci/aur@msys
+        with:
+          name: ${{ inputs.name }}
+          deps: ${{ inputs.deps }}
+          format: 'msys'
+          gpg_key: ${{ env.GPG_KEY }}
+          gpg_keyid: ${{ env.GPG_KEYID }}
+          gpg_pass: ${{ env.GPG_PASS }}
+
+      - name: Publish ${{ inputs.name }}
+        uses: tty-pt/ci/publish@msys
+        with:
+          source: '${{ inputs.name }}-msys-x86_64/*'
+          format: 'msys'
+          host: ${{ env.HOST }}
+          user: ${{ env.USER }}
+          ssh_key: ${{ env.SSH_KEY }}
+          gpg_key: ${{ env.GPG_KEY }}
+          gpg_keyid: ${{ env.GPG_KEYID }}
+          gpg_pass: ${{ env.GPG_PASS }}

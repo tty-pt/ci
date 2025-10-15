@@ -1,0 +1,143 @@
+name: 'Build AUR Package'
+description: 'Builds a package from the AUR, signs it, and creates a workflow artifact.'
+author: 'Gemini'
+
+inputs:
+  name:
+    description: 'The name of the package in the Arch User Repository (AUR).'
+    required: true
+  format:
+    description: 'PM Format (e.g., msys, pacman).'
+    required: true
+  deps:
+    description: 'Comma-separated list of dependencies.'
+    required: false
+  gpg_key:
+    description: 'ASCII-armored GPG private key for signing the package.'
+    required: false
+  gpg_keyid:
+    description: 'The Key ID or fingerprint of the GPG key to use for signing.'
+    required: false
+  gpg_pass:
+    description: 'The passphrase for the GPG key.'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Prepare enviroment vars
+      id: mkenv
+      shell: sh
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+        # Set PREFIX based on format
+        if [ "${{ inputs.format }}" = "msys" ]; then
+          echo "PREFIX=/mingw64" >> $GITHUB_ENV
+        else
+          echo "PREFIX=/usr" >> $GITHUB_ENV
+        fi
+
+        arch="$(uname -m)"
+        echo "arch=$arch" >> $GITHUB_ENV
+        echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
+        echo "ofile=${{ inputs.name }}-$VERSION-${{ inputs.format }}-$arch" >> $GITHUB_ENV
+
+    - name: Add Repo (PACMAN)
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
+      shell: sh
+      run: |
+        REPO_NAME="ttypt-${{ inputs.format }}"
+        REPO_CONF="/etc/pacman.conf"
+        URL="https://tty.pt/${{ inputs.format }}/x86_64/$REPO_NAME.db"
+        cat /etc/pacman.conf
+        if curl -sSf --http1.1 --ipv4 --connect-timeout 3 --max-time 6 -r 0-0 -o /dev/null "$URL"; then
+          {
+            echo ""
+            echo "[${REPO_NAME}]"
+            echo "SigLevel = Never"
+            echo "Server = https://tty.pt/${{ inputs.format }}/\$arch"
+          } | tee -a "$REPO_CONF"
+          echo "✓ Added custom $REPO_NAME repo to pacman.conf"
+        fi
+        pacman -Sy --noconfirm
+
+    - name: Install prerequisites (PACMAN)
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
+      shell: sh
+      run: |
+        deps="${{ inputs.deps }}"
+        echo "deps=$deps" > $GITHUB_ENV
+
+        pacman -Sy --noconfirm --overwrite base-devel git tar gzip zstd
+        if [ -n "$deps" ]; then
+          pacman -S --noconfirm --overwrite "*" $(echo "$deps" | tr ',' ' ')
+        fi
+
+    - name: Build AUR Package
+      shell: bash
+      run: |
+        # This entire script is executed as the 'builder' user
+        sudo -u builder bash -s -- \
+          "${{ inputs.name }}" \
+          "${{ inputs.gpg_key }}" \
+          "${{ inputs.gpg_keyid }}" \
+          "${{ inputs.gpg_pass }}" <<'SCRIPT'
+        
+        # Assign arguments to variables
+        PACKAGE_NAME="$1"
+        GPG_KEY="$2"
+        GPG_KEYID="$3"
+        GPG_PASSPHRASE="$4"
+        
+        # Set up GPG for signing if a key is provided
+        if [ -n "$GPG_KEY" ]; then
+          echo "--- Setting up GPG for signing ---"
+          export GPG_TTY=$(tty)
+          mkdir -p ~/.gnupg
+          chmod 700 ~/.gnupg
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          echo "$GPG_KEY" | gpg --batch --yes --import
+          gpg-connect-agent /bye
+        fi
+
+        git clone --depth=1 "https://aur.archlinux.org/$PACKAGE_NAME.git"
+        cd "$PACKAGE_NAME"
+
+        # --- THE ROBUST FIX ---
+        # Use 'makepkg --printsrcinfo' to reliably get the key IDs
+        echo "--- Importing required PGP keys from PKGBUILD ---"
+        KEYIDS=$(makepkg --printsrcinfo | grep 'validpgpkeys = ' | awk '{print $3}')
+        if [ -n "$KEYIDS" ]; then
+            gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys $KEYIDS
+        fi
+        # --- FIX ENDS HERE ---
+
+        MAKEPKG_OPTS="-s --noconfirm"
+        if [ -n "$GPG_KEYID" ]; then
+          export GPG_TTY=$(tty)
+          export GPG_OPTS="--pinentry-mode loopback --passphrase $GPG_PASSPHRASE"
+          MAKEPKG_OPTS="$MAKEPKG_OPTS --sign --key $GPG_KEYID"
+        fi
+        
+        # Now, makepkg will find the key and succeed
+        makepkg $MAKEPKG_OPTS
+        
+        echo "✅ Package build complete."
+        SCRIPT
+
+    - name: Stage Artifacts
+      shell: sh
+      run: |
+        mkdir -p ${{ env.iden }}
+        echo "Moving built packages to artifact directory..."
+        mv ./${{ inputs.name }}/*.pkg.tar.zst* ${{ env.iden }}/
+        echo "Contents of artifact directory:"
+        ls -l ${{ env.iden }}
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.iden }}
+        path: ${{ env.iden }}/*

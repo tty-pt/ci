@@ -45,6 +45,10 @@ inputs:
     description: 'OpenBSD dependency names'
     required: false
     default: ''
+  deps_msys:
+    description: 'Msys dependency names'
+    required: false
+    default: ''
   abuild_key:
     description: 'ABUILD key'
     required: false
@@ -119,7 +123,14 @@ runs:
       run: |
         VERSION=${GITHUB_REF_NAME#v}
         echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "PREFIX=/usr" >> $GITHUB_ENV
+
+        # Set PREFIX based on format
+        if [ "${{ inputs.format }}" = "msys" ]; then
+          echo "PREFIX=/mingw64" >> $GITHUB_ENV
+        else
+          echo "PREFIX=/usr" >> $GITHUB_ENV
+        fi
+
         arch="$(uname -m)"
         echo "arch=$arch" >> $GITHUB_ENV
         echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
@@ -142,18 +153,19 @@ runs:
       shell: sh
 
     - name: Add Repo (PACMAN)
-      if: inputs.format == 'pacman'
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
       shell: sh
       run: |
-        REPO_NAME="ttypt"
+        REPO_NAME="ttypt-${{ inputs.format }}"
         REPO_CONF="/etc/pacman.conf"
-        URL="https://tty.pt/pacman/x86_64/ttypt.db"
+        URL="https://tty.pt/${{ inputs.format }}/x86_64/$REPO_NAME.db"
+        cat /etc/pacman.conf
         if curl -sSf --http1.1 --ipv4 --connect-timeout 3 --max-time 6 -r 0-0 -o /dev/null "$URL"; then
           {
             echo ""
             echo "[${REPO_NAME}]"
             echo "SigLevel = Never"
-            echo "Server = https://tty.pt/pacman/\$arch"
+            echo "Server = https://tty.pt/${{ inputs.format }}/\$arch"
           } | tee -a "$REPO_CONF"
           echo "✓ Added custom $REPO_NAME repo to pacman.conf"
         fi
@@ -197,27 +209,33 @@ runs:
 
     - name: Install prerequisites (RPM)
       if: inputs.format == 'rpm'
+      shell: sh
       run: |
         deps="${{ inputs.deps_rpm || inputs.deps }}"
         echo "deps=$deps" > $GITHUB_ENV
 
-        microdnf repolist $dep
+        microdnf --noplugins repolist || true
+
         if [ -n "$deps" ]; then
-          for dep in $(echo "$deps" | tr ',' ' '); do
-            microdnf repoquery $dep
-          done
+          echo "Installing dependencies: $deps"
+          microdnf --noplugins \
+            install -y $(echo "$deps" | tr ',' ' ')
+        else
+          echo "No dependencies to install"
         fi
-        test ! -n "$deps" || microdnf install -y \
-                         $(echo "$deps" | tr ',' ' ')
-      shell: sh
+
 
     - name: Install prerequisites (PACMAN)
-      if: inputs.format == 'pacman'
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
       run: |
-        deps="${{ inputs.deps_pacman || inputs.deps }}"
+        if test "${{ inputs.format }}" = "pacman"; then
+          deps="${{ inputs.deps_pacman || inputs.deps }}"
+        else
+          deps="${{ inputs.deps_msys || inputs.deps }}"
+        fi
         echo "deps=$deps" > $GITHUB_ENV
 
-        pacman -Sy --noconfirm base-devel git tar gzip zstd
+        pacman -Sy --noconfirm zip
         if [ -n "$deps" ]; then
           pacman -S --noconfirm $(echo "$deps" | tr ',' ' ')
         fi
@@ -236,6 +254,7 @@ runs:
           done
         fi
       shell: sh
+
 
     - name: Fetch include.mk from tty-pt/mk
       run: |
@@ -273,7 +292,6 @@ runs:
           TRUSTED_PKG_PATH="$MY" PKG_PATH="$OFF" \
             pkg_add -DIu $deps
         fi
-        pwd
 
         cd /usr/src
 
@@ -285,13 +303,11 @@ runs:
         rm ${{ inputs.name }}.tar.gz
 
         cd ${{ inputs.name }}
-        pwd
 
         make
         make DESTDIR=../$stage install
         cd ../$stage
 
-        pwd
         find usr -type f
 
         echo "🧾 Generating packing list..."
@@ -378,9 +394,11 @@ runs:
       if: inputs.format != 'brew' && inputs.format != 'openbsd'
       run: |
         export PATH="/usr/bin:/bin:$PATH"
+        test "${{ inputs.format }}" != "msys" || export cross=Msys
 
+        find /usr/mingw64 -type f || true
         make
-        make DESTDIR=$PWD/stage PREFIX=${{ env.PREFIX }} install
+        make DESTDIR=$PWD/stage install
       shell: sh
 
     - name: Build and stage project
@@ -426,7 +444,7 @@ runs:
       shell: sh
 
     - name: Import abuild key
-      if: inputs.abuild_key != ''
+      if: inputs.abuild_key != '' && inputs.format == 'apk'
       run: |
         mkdir -p /home/builder/.abuild
         echo "${{ inputs.abuild_key }}" > /home/builder/.abuild/ttypt.rsa
@@ -440,8 +458,8 @@ runs:
         chown -R builder:builder /home/builder/.abuild
       shell: sh
 
-    - name: Generate PKGBUILD
-      if: inputs.format == 'pacman'
+    - name: Generate PKGBUILD (PACMAN + MSYS)
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
       shell: sh
       run: |
         {
@@ -465,8 +483,8 @@ runs:
           echo "}"
         } > PKGBUILD
 
-    - name: Build package (PACMAN)
-      if: inputs.format == 'pacman'
+    - name: Build package (PACMAN + MSYS)
+      if: inputs.format == 'pacman' || inputs.format == 'msys'
       run: |
         mkdir -p ${{ env.iden }}
         chown -R builder:builder "$PWD"
@@ -477,7 +495,102 @@ runs:
           mkdir -p ${{ env.iden }}
           mv *.pkg.tar.* ${{ env.iden }} || true
         '
+
+        cd ${{ env.iden }}
+        rm *debug* || true
+        mv *.pkg.tar.zst ${{ env.ofile }}.pkg.tar.zst
       shell: sh
+
+    - name: Build Msys zip
+      if: inputs.format == 'msys'
+      shell: sh
+      run: |
+        cd ${{ env.iden }}
+        mkdir extracted zip
+        tar -xaf ${{ env.ofile }}.pkg.tar.zst -C extracted
+
+        curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/msys/scripts/rldd.sh -o rldd.sh
+        chmod +x rldd.sh
+
+        bin_dir=$(find extracted -type d -name bin | head -n1 || true)
+        [ -n "$bin_dir" ] || { echo "No bin directory found"; exit 1; }
+
+        export PATH="/mingw64/bin:/mingw64/lib:$PATH"
+        bin_dir=$(find extracted -type d -name bin | head -n1)
+        export RLDD="x86_64-w64-mingw32-ldd"
+        export RLDD_PATH="/usr/x86_64-w64-mingw32/bin/:/usr/x86_64-w64-mingw32/lib:/mingw64/lib:/mingw64/bin"
+        export RLDD_SO="dll"
+        pacman -S --noconfirm mingw-w64-ldd
+
+        find $bin_dir -type f
+        has_exe=""
+        for exe in "$bin_dir"/*; do
+          if file "$exe" | grep -q "PE32"; then
+            echo "→ Collecting dependencies for $(basename "$exe")"
+            case "$var" in
+              *.exe) has_exe=1 ;;
+            esac
+            cp -n "$exe" zip/
+
+            ./rldd.sh "$exe" | while read -r dll arrow path more; do
+              [ -z "$dll" ] && continue
+              if [ ! -f "$path" ]; then
+                echo "RLDD NOT FOUND: $dll" >&2
+                continue
+              fi
+              cp -n "$path" zip/ 2>/dev/null || true
+            done
+          fi
+        done
+
+        if test -z "$has_exe"; then
+          rm -rf extracted zip rldd.sh
+          echo "→ No executables. Skip zip and setup.exe creation"
+          echo "skip_installer=true" >> $GITHUB_ENV
+          exit 0
+        fi
+
+        if [ -d extracted/mingw64/share ]; then
+          cp -r extracted/mingw64/share/${{ inputs.name }}/* zip/
+        fi
+
+        echo "📦 Creating archive..."
+        (cd zip && zip -r "../${{ env.ofile }}.zip" . >/dev/null)
+        rm -rf extracted zip rldd.sh
+        echo "✅ Done: ${{ env.ofile }}.zip"
+
+    - name: Build setup.exe with Inno Setup (headless, no GUI)
+      if: inputs.format == 'msys' && env.skip_installer != 'true'
+      shell: bash
+      run: |
+        set -e
+
+        export WINEARCH=win64
+        export WINEPREFIX="$PWD/wineprefix"
+        rm -rf "$WINEPREFIX"
+        mkdir -p "$WINEPREFIX"
+        wineboot --init
+        export WINEDEBUG=-all
+        export WINEDLLOVERRIDES="mshtml,winemenubuilder.exe=d"
+        export DISPLAY=":0"
+        export XDG_RUNTIME_DIR="/tmp/runtime-$USER"
+        mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+
+        wget -q https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe -O is.exe
+        xvfb-run -a wine is.exe /SP- /VERYSILENT /NORESTART /SUPPRESSMSGBOXES /DIR=C:\\innosetup
+
+        curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/msys/config/installer.iss -o installer.template.iss
+        sed "s/APP_NAME/${{ inputs.name }}/g" installer.template.iss > installer.iss
+
+        unzip -o "${{ env.iden }}/${{ env.ofile }}.zip" -d zip
+        which wine
+        xvfb-run -a wine "C:\\innosetup\\ISCC.exe" installer.iss
+        mv Output/fb-rpg-setup.exe "${{ env.iden }}/${{ env.ofile }}-setup.exe"
+        rm -rf \
+          zip wineprefix Output is.exe \
+          installer.iss installer.template.iss \
+          rldd.sh
+        echo "✅ Created installer: ${{ env.ofile }}-setup.exe"
 
     - name: Generate APKBUILD
       if: inputs.format == 'apk'
@@ -640,9 +753,10 @@ runs:
         ls -l ${{ env.iden }}/
       shell: sh
 
-    - name: Sign package (PACMAN + DEB)
+    - name: Sign package (PACMAN + DEB + MSYS)
       if: (inputs.format == 'pacman'
-        || inputs.format == 'deb')
+        || inputs.format == 'deb'
+        || inputs.format == 'msys')
         && inputs.gpg_key != ''
       run: |
         ext=${{ inputs.ext || inputs.format }}
