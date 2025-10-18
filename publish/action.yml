@@ -6,8 +6,12 @@ inputs:
   name:
     description: 'Package name'
     required: true
+  repo:
+    description: 'Override "format" as target folder'
+    required: false
+    default: ''
   format:
-    description: 'Repository format (deb, rpm, apk, pacman)'
+    description: 'Package format'
     required: true
   deps:
     description: 'Generic dependencies'
@@ -16,9 +20,6 @@ inputs:
     description: 'Brew dependency names'
     required: false
     default: ''
-  source:
-    description: 'Glob for package files to upload (e.g., dist-deb/*.deb)'
-    required: true
   host:
     description: 'Remote server hostname'
     required: true
@@ -90,7 +91,6 @@ runs:
         echo "✅ SSH config prepared for host"
 
     - name: Prepare enviroment vars
-      id: mkenv
       run: |
         VERSION="${GITHUB_REF_NAME#v}"
         [ -n "$VERSION" ] || VERSION="$(date -u +%Y.%m.%d)"
@@ -102,6 +102,15 @@ runs:
         ofilep=${{ inputs.name }}-$VERSION-${{ inputs.format }}
         echo "ofilep=$ofilep" >> $GITHUB_ENV
         echo "ofile=$ofilep-$arch" >> $GITHUB_ENV
+
+        if test -z "${{ inputs.repo }}"; then
+          REPO=${{ inputs.format }}
+        else
+          REPO=${{ inputs.repo }}
+        fi
+
+        echo "REPO=$REPO" >> $GITHUB_ENV
+
       shell: sh
 
     - name: Download APK artifacts
@@ -127,7 +136,7 @@ runs:
         find dist -path "*-${{ inputs.format }}-*"
 
         rsync -avz -e "ssh -F $HOME/.ssh/config" \
-          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ inputs.format }}/" repo/
+          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/" repo/
 
         cd repo
         find ../dist -mindepth 2 -maxdepth 2 \
@@ -316,11 +325,7 @@ runs:
           mv $file ${{ env.arch }}
         done
 
-        REPO_NAME=${{ inputs.repo_name }}
-        test ! -z "$REPO_NAME" || \
-            REPO_NAME="ttypt-${{ inputs.format }}"
-
-        echo "Updating Pacman repo '$REPO_NAME'..."
+        echo "Updating Pacman repo '${{ env.REPO }}'..."
 
         if [ -n "${{ inputs.gpg_key }}" ]; then
           mkdir -p "$HOME/.gnupg"
@@ -339,19 +344,19 @@ runs:
           pkgs="$pkgs $pkg"
         done
 
-        eval repo-add $GPG_OPTS "${REPO_NAME}.db.tar.gz" $pkgs
+        eval repo-add $GPG_OPTS "${{ env.REPO }}.db.tar.gz" $pkgs
 
-        ln -sf "${REPO_NAME}.db.tar.gz" "${REPO_NAME}.db"
-        ln -sf "${REPO_NAME}.files.tar.gz" "${REPO_NAME}.files"
+        ln -sf "${{ env.REPO }}.db.tar.gz" "${{ env.REPO }}.db"
+        ln -sf "${{ env.REPO }}.files.tar.gz" "${{ env.REPO }}.files"
         cd ..
         {
-          echo "[${REPO_NAME}]"
+          echo "[${{ env.REPO }}]"
           echo "SigLevel = Required DatabaseOptional"
-          echo "Server = https://tty.pt/${{ inputs.format }}/\$arch"
-        } > "${REPO_NAME}.conf"
+          echo "Server = https://tty.pt/${{ env.REPO }}/\$arch"
+        } > "${{ env.REPO }}.conf"
 
         if [ -n "${{ inputs.gpg_keyid }}" ]; then
-          gpg --export --armor "${{ inputs.gpg_keyid }}" > "key-${REPO_NAME}.pub"
+          gpg --export --armor "${{ inputs.gpg_keyid }}" > "key-${{ env.REPO }}.pub"
         fi
 
     - name: Publish macOS repo
@@ -445,7 +450,7 @@ runs:
       run: |
         echo "Syncing repository..."
         rsync -avz -e "ssh -F $HOME/.ssh/config" \
-          repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ inputs.format }}/"
+          repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/"
 
     - name: Publish OpenBSD repo
       if: inputs.format == 'openbsd'

@@ -156,16 +156,16 @@ runs:
       if: inputs.format == 'pacman' || inputs.format == 'msys'
       shell: sh
       run: |
-        REPO_NAME="ttypt-${{ inputs.format }}"
+        REPO_NAME="ttypt-${{ env.REPO }}"
         REPO_CONF="/etc/pacman.conf"
-        URL="https://tty.pt/${{ inputs.format }}/x86_64/$REPO_NAME.db"
+        URL="https://tty.pt/${{ env.REPO }}/x86_64/$REPO_NAME.db"
         cat /etc/pacman.conf
         if curl -sSf --http1.1 --ipv4 --connect-timeout 3 --max-time 6 -r 0-0 -o /dev/null "$URL"; then
           {
             echo ""
             echo "[${REPO_NAME}]"
             echo "SigLevel = Never"
-            echo "Server = https://tty.pt/${{ inputs.format }}/\$arch"
+            echo "Server = https://tty.pt/${{ env.REPO }}/\$arch"
           } | tee -a "$REPO_CONF"
           echo "✓ Added custom $REPO_NAME repo to pacman.conf"
         fi
@@ -462,8 +462,16 @@ runs:
       if: inputs.format == 'pacman' || inputs.format == 'msys'
       shell: sh
       run: |
+        if [ "${{ inputs.format }}" = "msys" ]; then
+          PKG_NAME="mingw-w64-ucrt-x86_64-${{ inputs.name }}"
+        else
+          PKG_NAME="${{ inputs.name }}"
+        fi
+        echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
+        echo "ofile=$PKG_NAME-$VERSION-${{ inputs.format }}-$arch" >> $GITHUB_ENV
+
         {
-          echo "pkgname=${{ inputs.name }}"
+          echo "pkgname=$PKG_NAME"
           echo "pkgver=${{ env.VERSION }}"
           echo "pkgrel=1"
           echo "pkgdesc=\"${{ inputs.name }} binary package\""

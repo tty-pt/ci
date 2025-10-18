@@ -9,6 +9,10 @@ inputs:
   format:
     description: 'PM Format (e.g., msys, pacman).'
     required: true
+  repo:
+    description: 'Override "format" as target folder'
+    required: false
+    default: ''
   deps:
     description: 'Comma-separated list of dependencies.'
     required: false
@@ -44,23 +48,19 @@ runs:
         echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
         echo "ofile=${{ inputs.name }}-$VERSION-${{ inputs.format }}-$arch" >> $GITHUB_ENV
 
+        if test -z "${{ inputs.repo }}"; then
+          REPO=${{ inputs.format }}
+        else
+          REPO=${{ inputs.repo }}
+        fi
+
+        echo "REPO=$REPO" >> $GITHUB_ENV
+
     - name: Add Repo (PACMAN)
       if: inputs.format == 'pacman' || inputs.format == 'msys'
       shell: sh
       run: |
-        REPO_NAME="ttypt-${{ inputs.format }}"
-        REPO_CONF="/etc/pacman.conf"
-        URL="https://tty.pt/${{ inputs.format }}/x86_64/$REPO_NAME.db"
-        cat /etc/pacman.conf
-        if curl -sSf --http1.1 --ipv4 --connect-timeout 3 --max-time 6 -r 0-0 -o /dev/null "$URL"; then
-          {
-            echo ""
-            echo "[${REPO_NAME}]"
-            echo "SigLevel = Never"
-            echo "Server = https://tty.pt/${{ inputs.format }}/\$arch"
-          } | tee -a "$REPO_CONF"
-          echo "✓ Added custom $REPO_NAME repo to pacman.conf"
-        fi
+        curl https://tty.pt/${{ env.REPO }}/pacman.conf >> /etc/pacman.conf
         pacman -Sy --noconfirm
 
     - name: Install prerequisites (PACMAN)
@@ -105,14 +105,12 @@ runs:
         git clone --depth=1 "https://aur.archlinux.org/$PACKAGE_NAME.git"
         cd "$PACKAGE_NAME"
 
-        # --- THE ROBUST FIX ---
         # Use 'makepkg --printsrcinfo' to reliably get the key IDs
         echo "--- Importing required PGP keys from PKGBUILD ---"
         KEYIDS=$(makepkg --printsrcinfo | grep 'validpgpkeys = ' | awk '{print $3}')
         if [ -n "$KEYIDS" ]; then
             gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys $KEYIDS
         fi
-        # --- FIX ENDS HERE ---
 
         MAKEPKG_OPTS="-s --noconfirm"
         if [ -n "$GPG_KEYID" ]; then
@@ -126,6 +124,20 @@ runs:
         
         echo "✅ Package build complete."
         SCRIPT
+
+    - name: Sign package (PACMAN + DEB + MSYS)
+      if: (inputs.format == 'pacman'
+        || inputs.format == 'deb'
+        || inputs.format == 'msys')
+        && inputs.gpg_key != ''
+      run: |
+        ext=${{ inputs.ext || inputs.format }}
+        for pkg in ${{ env.iden }}/*.$ext; do
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "${{ inputs.gpg_pass }}" \
+            --detach-sign --armor -u "${{ inputs.gpg_keyid }}" "$pkg"
+        done
+      shell: sh
 
     - name: Stage Artifacts
       shell: sh

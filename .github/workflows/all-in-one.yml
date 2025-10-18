@@ -156,6 +156,7 @@ jobs:
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/rocky-builder:latest
           - format: msys
+            repo: pacman
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/msys-builder:latest
           - format: openbsd
