@@ -3,12 +3,19 @@ description: 'Builds a package from the AUR, signs it, and creates a workflow ar
 author: 'Gemini'
 
 inputs:
+  host:
+    description: 'Remote server hostname'
+    required: true
   name:
     description: 'The name of the package in the Arch User Repository (AUR).'
     required: true
   format:
     description: 'PM Format (e.g., msys, pacman).'
     required: true
+  repo:
+    description: 'Override "format" as target folder'
+    required: false
+    default: ''
   deps:
     description: 'Comma-separated list of dependencies.'
     required: false
@@ -44,23 +51,30 @@ runs:
         echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
         echo "ofile=${{ inputs.name }}-$VERSION-${{ inputs.format }}-$arch" >> $GITHUB_ENV
 
+        if test -z "${{ inputs.repo }}"; then
+          REPO=${{ inputs.format }}
+        else
+          REPO=${{ inputs.repo }}
+        fi
+        echo "REPO=$REPO" >> $GITHUB_ENV
+
+        REPO_NAME="$(echo ${{ inputs.host }} | tr -d '.')"
+        echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+
     - name: Add Repo (PACMAN)
       if: inputs.format == 'pacman' || inputs.format == 'msys'
       shell: sh
       run: |
-        REPO_NAME="ttypt-${{ inputs.format }}"
-        REPO_CONF="/etc/pacman.conf"
-        URL="https://tty.pt/${{ inputs.format }}/x86_64/$REPO_NAME.db"
-        cat /etc/pacman.conf
+        URL="https://${{ inputs.host }}/${{ env.REPO }}"
+        URL="$URL/x86_64/${{ env.REPO_NAME }}.db"
         if curl -sSf --http1.1 --ipv4 --connect-timeout 3 --max-time 6 -r 0-0 -o /dev/null "$URL"; then
-          {
-            echo ""
-            echo "[${REPO_NAME}]"
-            echo "SigLevel = Never"
-            echo "Server = https://tty.pt/${{ inputs.format }}/\$arch"
-          } | tee -a "$REPO_CONF"
-          echo "✓ Added custom $REPO_NAME repo to pacman.conf"
+          cat <<EOF | tee -a /etc/pacman.conf
+        [${{ env.REPO_NAME }}]
+        SigLevel = Never
+        Server = https://tty.pt/${{ env.REPO }}/\$arch
+        EOF
         fi
+
         pacman -Sy --noconfirm
 
     - name: Install prerequisites (PACMAN)
@@ -74,6 +88,21 @@ runs:
         if [ -n "$deps" ]; then
           pacman -S --noconfirm --overwrite "*" $(echo "$deps" | tr ',' ' ')
         fi
+
+    - name: Loopback GPG entry
+      if: inputs.gpg_key != ''
+      run: |
+        echo "Importing GPG KEY"
+        export GPG_TTY=$(tty || true)
+        mkdir -p ~/.gnupg
+        chmod 700 ~/.gnupg
+        echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+        gpgconf --kill gpg-agent
+        gpgconf --launch gpg-agent
+        echo "${{ inputs.gpg_key }}" | sudo -u builder gpg --batch --yes --import
+        echo "%_gpg_name ${{ inputs.gpg_keyid }}" > ~/.rpmmacros
+        export GPG_OPTS="--pinentry-mode loopback --passphrase ${{ inputs.gpg_pass }}"
+      shell: sh
 
     - name: Build AUR Package
       shell: bash
@@ -91,38 +120,21 @@ runs:
         GPG_KEYID="$3"
         GPG_PASSPHRASE="$4"
         
-        # Set up GPG for signing if a key is provided
-        if [ -n "$GPG_KEY" ]; then
-          echo "--- Setting up GPG for signing ---"
-          export GPG_TTY=$(tty)
-          mkdir -p ~/.gnupg
-          chmod 700 ~/.gnupg
-          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
-          echo "$GPG_KEY" | gpg --batch --yes --import
-          gpg-connect-agent /bye
-        fi
-
         git clone --depth=1 "https://aur.archlinux.org/$PACKAGE_NAME.git"
         cd "$PACKAGE_NAME"
 
-        # --- THE ROBUST FIX ---
-        # Use 'makepkg --printsrcinfo' to reliably get the key IDs
-        echo "--- Importing required PGP keys from PKGBUILD ---"
         KEYIDS=$(makepkg --printsrcinfo | grep 'validpgpkeys = ' | awk '{print $3}')
         if [ -n "$KEYIDS" ]; then
             gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys $KEYIDS
         fi
-        # --- FIX ENDS HERE ---
-
-        MAKEPKG_OPTS="-s --noconfirm"
-        if [ -n "$GPG_KEYID" ]; then
-          export GPG_TTY=$(tty)
-          export GPG_OPTS="--pinentry-mode loopback --passphrase $GPG_PASSPHRASE"
-          MAKEPKG_OPTS="$MAKEPKG_OPTS --sign --key $GPG_KEYID"
-        fi
         
         # Now, makepkg will find the key and succeed
-        makepkg $MAKEPKG_OPTS
+        makepkg -s --noconfirm
+
+        PKG_FILE=$(find . -maxdepth 1 -name "*.pkg.tar.zst")
+        gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "$GPG_PASSPHRASE" \
+            --detach-sign --armor -u "$GPG_KEYID" "$PKG_FILE"
         
         echo "✅ Package build complete."
         SCRIPT

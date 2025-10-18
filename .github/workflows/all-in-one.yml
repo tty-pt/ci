@@ -99,6 +99,7 @@ jobs:
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/rocky-builder:latest
           - format: msys
+            repo: pacman
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/msys-builder:latest
           - format: openbsd
@@ -117,6 +118,7 @@ jobs:
         with:
           name: ${{ inputs.name }}
           format: ${{ matrix.format }}
+          repo: ${{ matrix.repo }}
           ext: ${{ (matrix.format == 'pacman' || matrix.format == 'msys') && 'pkg.tar.*' || '' }}
           deps: ${{ inputs.deps }}
           deps_deb: ${{ inputs.deps_deb || '' }}
@@ -156,8 +158,9 @@ jobs:
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/rocky-builder:latest
           - format: msys
+            repo: pacman
             runner: ubuntu-latest
-            image: ghcr.io/tty-pt/msys-builder:latest
+            image: ghcr.io/tty-pt/arch-builder:latest
           - format: openbsd
             runner: ubuntu-latest
           - format: brew
@@ -174,7 +177,7 @@ jobs:
         with:
           name: ${{ inputs.name }}
           format: ${{ matrix.format }}
-          source: '*-${{ matrix.format }}-*/*'
+          repo: ${{ matrix.repo }}
           host: ${{ secrets.HOST }}
           user: ${{ secrets.USER }}
           ssh_key: ${{ secrets.SSH_KEY }}

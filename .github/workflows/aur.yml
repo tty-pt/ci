@@ -29,7 +29,7 @@ jobs:
   build-and-publish-one:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/tty-pt/msys-builder:latest
+      image: ghcr.io/tty-pt/arch-builder:latest
     env:
       HOST: ${{ secrets.HOST }}
       USER: ${{ secrets.USER }}
@@ -45,6 +45,8 @@ jobs:
           name: ${{ inputs.name }}
           deps: ${{ inputs.deps }}
           format: 'msys'
+          repo: 'pacman'
+          host: ${{ env.HOST }}
           gpg_key: ${{ env.GPG_KEY }}
           gpg_keyid: ${{ env.GPG_KEYID }}
           gpg_pass: ${{ env.GPG_PASS }}
@@ -52,8 +54,8 @@ jobs:
       - name: Publish ${{ inputs.name }}
         uses: tty-pt/ci/publish@msys
         with:
-          source: '${{ inputs.name }}-msys-x86_64/*'
           format: 'msys'
+          repo: 'pacman'
           host: ${{ env.HOST }}
           user: ${{ env.USER }}
           ssh_key: ${{ env.SSH_KEY }}

@@ -6,8 +6,12 @@ inputs:
   name:
     description: 'Package name'
     required: true
+  repo:
+    description: 'Override "format" as target folder'
+    required: false
+    default: ''
   format:
-    description: 'Repository format (deb, rpm, apk, pacman)'
+    description: 'Package format'
     required: true
   deps:
     description: 'Generic dependencies'
@@ -16,9 +20,6 @@ inputs:
     description: 'Brew dependency names'
     required: false
     default: ''
-  source:
-    description: 'Glob for package files to upload (e.g., dist-deb/*.deb)'
-    required: true
   host:
     description: 'Remote server hostname'
     required: true
@@ -90,7 +91,6 @@ runs:
         echo "✅ SSH config prepared for host"
 
     - name: Prepare enviroment vars
-      id: mkenv
       run: |
         VERSION="${GITHUB_REF_NAME#v}"
         [ -n "$VERSION" ] || VERSION="$(date -u +%Y.%m.%d)"
@@ -102,6 +102,18 @@ runs:
         ofilep=${{ inputs.name }}-$VERSION-${{ inputs.format }}
         echo "ofilep=$ofilep" >> $GITHUB_ENV
         echo "ofile=$ofilep-$arch" >> $GITHUB_ENV
+
+        if test -z "${{ inputs.repo }}"; then
+          REPO=${{ inputs.format }}
+        else
+          REPO=${{ inputs.repo }}
+        fi
+
+        echo "REPO=$REPO" >> $GITHUB_ENV
+
+        REPO_NAME="$(echo ${{ inputs.host }} | tr -d '.')"
+        echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
+
       shell: sh
 
     - name: Download APK artifacts
@@ -118,6 +130,19 @@ runs:
           echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
         fi
 
+    - name: Acquire lock
+      shell: sh
+      run: |
+        echo "⏳ Waiting for remote lock..."
+        ssh -F $HOME/.ssh/config ${{ inputs.host }} "
+          cd /var/www/htdocs/${{ env.REPO }}
+          while ! mkdir publish.lock 2>/dev/null; do
+            sleep 2
+          done
+          echo \$\$ > publish.lock/pid
+          echo '✅ Remote lock acquired by PID' \$\$
+        "
+
     - name: Prepare repo folder
       if: inputs.format != 'openbsd'
       shell: sh
@@ -127,7 +152,7 @@ runs:
         find dist -path "*-${{ inputs.format }}-*"
 
         rsync -avz -e "ssh -F $HOME/.ssh/config" \
-          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ inputs.format }}/" repo/
+          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/" repo/
 
         cd repo
         find ../dist -mindepth 2 -maxdepth 2 \
@@ -291,20 +316,18 @@ runs:
 
         # generate .repo file
         cd ..
-        REPO_NAME=${{ inputs.repo_name }}
-        test ! -z "$REPO_NAME" || REPO_NAME='ttypt-${{ inputs.format }}'
         {
-          echo "[$REPO_NAME]"
-          echo "name=$REPO_NAME Repository"
+          echo "[${{ env.REPO_NAME }}]"
+          echo "name=${{ env.REPO_NAME }} Repository"
           echo "baseurl=https://tty.pt/rpm/\$basearch"
           echo "enabled=1"
           echo "gpgcheck=1"
-          echo "gpgkey=https://tty.pt/rpm/RPM-GPG-KEY-$REPO_NAME"
-        } > "$REPO_NAME.repo"
+          echo "gpgkey=https://tty.pt/rpm/RPM-GPG-KEY-${{ env.REPO_NAME }}"
+        } > "${{ env.REPO_NAME }}.repo"
 
         # export public GPG key if any
         if [ -n "${{ inputs.gpg_keyid }}" ]; then
-          gpg --export --armor "${{ inputs.gpg_keyid }}" > "RPM-GPG-KEY-$REPO_NAME"
+          gpg --export --armor "${{ inputs.gpg_keyid }}" > "RPM-GPG-KEY-${{ env.REPO_NAME }}"
         fi
 
     - name: Publish PACMAN / MSYS repo
@@ -316,11 +339,7 @@ runs:
           mv $file ${{ env.arch }}
         done
 
-        REPO_NAME=${{ inputs.repo_name }}
-        test ! -z "$REPO_NAME" || \
-            REPO_NAME="ttypt-${{ inputs.format }}"
-
-        echo "Updating Pacman repo '$REPO_NAME'..."
+        echo "Updating Pacman repo '${{ env.REPO_NAME }}'..."
 
         if [ -n "${{ inputs.gpg_key }}" ]; then
           mkdir -p "$HOME/.gnupg"
@@ -339,19 +358,19 @@ runs:
           pkgs="$pkgs $pkg"
         done
 
-        eval repo-add $GPG_OPTS "${REPO_NAME}.db.tar.gz" $pkgs
+        eval repo-add $GPG_OPTS "${{ env.REPO_NAME }}.db.tar.gz" $pkgs
 
-        ln -sf "${REPO_NAME}.db.tar.gz" "${REPO_NAME}.db"
-        ln -sf "${REPO_NAME}.files.tar.gz" "${REPO_NAME}.files"
+        ln -sf "${{ env.REPO_NAME }}.db.tar.gz" "${{ env.REPO_NAME }}.db"
+        ln -sf "${{ env.REPO_NAME }}.files.tar.gz" "${{ env.REPO_NAME }}.files"
         cd ..
         {
-          echo "[${REPO_NAME}]"
+          echo "[${{ env.REPO_NAME }}]"
           echo "SigLevel = Required DatabaseOptional"
-          echo "Server = https://tty.pt/${{ inputs.format }}/\$arch"
-        } > "${REPO_NAME}.conf"
+          echo "Server = https://tty.pt/${{ env.REPO }}/\$arch"
+        } > "${{ env.REPO_NAME }}.conf"
 
         if [ -n "${{ inputs.gpg_keyid }}" ]; then
-          gpg --export --armor "${{ inputs.gpg_keyid }}" > "key-${REPO_NAME}.pub"
+          gpg --export --armor "${{ inputs.gpg_keyid }}" > "key-${{ env.REPO_NAME }}.pub"
         fi
 
     - name: Publish macOS repo
@@ -445,7 +464,7 @@ runs:
       run: |
         echo "Syncing repository..."
         rsync -avz -e "ssh -F $HOME/.ssh/config" \
-          repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ inputs.format }}/"
+          repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/"
 
     - name: Publish OpenBSD repo
       if: inputs.format == 'openbsd'
@@ -485,3 +504,14 @@ runs:
 
           echo "✅ OpenBSD package index created at $TARGET/index.txt"
         EOF
+
+    - name: Release lock
+      if: always()
+      shell: sh
+      run: |
+        echo "🔓 Releasing remote lock..."
+        ssh -F $HOME/.ssh/config ${{ inputs.host }} "
+          cd /var/www/htdocs/${{ env.REPO }}
+          rm -rf publish.lock
+        " || true
+        echo '✅ Remote lock released.'
