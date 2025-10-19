@@ -114,7 +114,7 @@ jobs:
     steps:
       - name: Package for ${{ matrix.format }} (${{ matrix.arch || 'default' }})
         if: contains(inputs.publish_to, matrix.format)
-        uses: tty-pt/ci/package@msys
+        uses: tty-pt/ci/package@main
         with:
           name: ${{ inputs.name }}
           format: ${{ matrix.format }}
@@ -173,7 +173,7 @@ jobs:
     steps:
       - name: Publish ${{ matrix.format }}
         if: contains(inputs.publish_to, matrix.format)
-        uses: tty-pt/ci/publish@msys
+        uses: tty-pt/ci/publish@main
         with:
           name: ${{ inputs.name }}
           format: ${{ matrix.format }}

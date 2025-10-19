@@ -40,7 +40,7 @@ jobs:
 
     steps:
       - name: Build ${{ inputs.name }}
-        uses: tty-pt/ci/aur@msys
+        uses: tty-pt/ci/aur@main
         with:
           name: ${{ inputs.name }}
           deps: ${{ inputs.deps }}
@@ -52,7 +52,7 @@ jobs:
           gpg_pass: ${{ env.GPG_PASS }}
 
       - name: Publish ${{ inputs.name }}
-        uses: tty-pt/ci/publish@msys
+        uses: tty-pt/ci/publish@main
         with:
           format: 'pacman_mingw'
           repo: 'pacman'

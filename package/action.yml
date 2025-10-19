@@ -528,7 +528,7 @@ runs:
         mkdir extracted zip
         tar -xaf ${{ env.ofile }}.pkg.tar.zst -C extracted
 
-        curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/msys/scripts/rldd.sh -o rldd.sh
+        curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/scripts/rldd.sh -o rldd.sh
         chmod +x rldd.sh
 
         bin_dir=$(find extracted -type d -name bin | head -n1 || true)
@@ -598,7 +598,7 @@ runs:
         wget -q https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe -O is.exe
         xvfb-run -a wine is.exe /SP- /VERYSILENT /NORESTART /SUPPRESSMSGBOXES /DIR=C:\\innosetup
 
-        curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/msys/config/installer.iss -o installer.template.iss
+        curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/config/installer.iss -o installer.template.iss
         sed "s/APP_NAME/${{ inputs.name }}/g" installer.template.iss > installer.iss
 
         unzip -o "${{ env.iden }}/${{ env.ofile }}.zip" -d zip
