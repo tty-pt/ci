@@ -480,27 +480,21 @@ runs:
         ./dist/${{ env.iden }}/${{ env.ofile }}.tgz \
           ${{ inputs.host }}:$TARGET/${{ inputs.name }}-${{ env.VERSION }}.tgz
 
-        scp -F $HOME/.ssh/config \
-        ./dist/${{ env.iden }}/${{ env.ofile }}.tgz.sig \
-          ${{ inputs.host }}:$TARGET/${{ inputs.name }}-${{ env.VERSION }}.tgz.sig
-
         LOCAL="/var/www/var/ci-chroot/tmp/"
         ssh -F "$HOME/.ssh/config" ${{ inputs.host }} <<EOF
           set -e
           cd $TARGET
+
+          doas /usr/local/sbin/ci-sign-pkg \
+            ${{ inputs.name }}-${{ env.VERSION }}.tgz
+
           echo 🧾 Generating package index...
           rm -f index.txt
           ls -nlT >index.txt
 
           chmod 644 index.txt
           sha256 -b *.tgz > SHA256
-          signify -S -s /etc/signify/openbsd-76-ttypt.sec -m SHA256 -x SHA256.sig
-
-          cp ${{ inputs.name }}-${{ env.VERSION }}.tgz* $LOCAL
-          cd $LOCAL
-          ls -al
-          sha256 -b *.tgz > SHA256
-          signify -S -s /etc/signify/openbsd-76-ttypt.sec -m SHA256 -x SHA256.sig
+          doas /usr/local/sbin/ci-sign-repo
 
           echo "✅ OpenBSD package index created at $TARGET/index.txt"
         EOF

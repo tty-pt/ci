@@ -297,11 +297,8 @@ runs:
 
         deps="$(echo ${{ env.deps }} | tr ',' ' ')"
         echo "📦 Installing dependencies '$deps'..."
-        echo "My: $MY"
-        echo "Off: $OFF"
         if test ! -z "$deps"; then
-          TRUSTED_PKG_PATH="$MY" PKG_PATH="$OFF" \
-            pkg_add -DIu $deps
+          PKG_PATH="$MY:$OFF" pkg_add -DIu $deps
         fi
 
         cd /usr/src
@@ -366,11 +363,7 @@ runs:
 
         cd ../dist-openbsd/
 
-        signify -S -s /etc/signify/openbsd-76-ttypt.sec \
-          -m $obsd_file -x $obsd_file.sig
-
         mv $obsd_file ${{ env.ofile }}.tgz
-        mv $obsd_file.sig ${{ env.ofile }}.tgz.sig
 
         rm DESC PLIST
 
@@ -378,16 +371,13 @@ runs:
         ls -lh
         EOF
 
-
         mkdir ${{ env.iden }}
         scp -F $HOME/.ssh/config ${{ inputs.host }}:/var/www/var/ci-chroot/usr/src/dist-openbsd/${{ env.ofile }}.tgz ${{ env.iden }}/
-        scp -F $HOME/.ssh/config ${{ inputs.host }}:/var/www/var/ci-chroot/usr/src/dist-openbsd/${{ env.ofile }}.tgz.sig ${{ env.iden }}/
 
         ssh -F $HOME/.ssh/config ${{ inputs.host }} doas /usr/local/sbin/ci-chroot <<'EOF'
         cd /usr/src/
         rm -rf mk ${{ inputs.name }} \
           dist-openbsd/${{ env.ofile }}.tgz \
-          dist-openbsd/${{ env.ofile }}.tgz.sig \
           stage-${{ env.iden }}
         EOF
 
@@ -532,7 +522,11 @@ runs:
         chmod +x rldd.sh
 
         bin_dir=$(find extracted -type d -name bin | head -n1 || true)
-        [ -n "$bin_dir" ] || { echo "No bin directory found"; exit 1; }
+        if [ -n "$bin_dir" ]; then
+          rm -rf extracted zip
+          echo "skip_installer=true" >> $GITHUB_ENV
+          exit 0
+        fi
 
         export PATH="/mingw64/bin:/mingw64/lib:$PATH"
         bin_dir=$(find extracted -type d -name bin | head -n1)
@@ -713,14 +707,18 @@ runs:
         echo ""                           >> $SPEC
         echo "%files"                     >> $SPEC
 
-        test ! -d stage/usr/lib \
-          || echo "${{ env.PREFIX }}/lib/*" >> $SPEC
-        test ! -d stage/usr/include \
-          || echo "${{ env.PREFIX }}/include/*" >> $SPEC
-        test ! -d stage/usr/bin \
-          || echo "${{ env.PREFIX }}/bin/*" >> $SPEC
-        test ! -d stage/usr/share \
-          || echo "${{ env.PREFIX }}/share/*" >> $SPEC
+        if [ -n "$(find stage/usr/lib -mindepth 1 -print -quit 2>/dev/null)" ]; then
+          echo "${{ env.PREFIX }}/lib/*" >> "$SPEC"
+        fi
+        if [ -n "$(find stage/usr/include -mindepth 1 -print -quit 2>/dev/null)" ]; then
+          echo "${{ env.PREFIX }}/include/*" >> "$SPEC"
+        fi
+        if [ -n "$(find stage/usr/bin -mindepth 1 -print -quit 2>/dev/null)" ]; then
+          echo "${{ env.PREFIX }}/bin/*" >> "$SPEC"
+        fi
+        if [ -n "$(find stage/usr/share -mindepth 1 -print -quit 2>/dev/null)" ]; then
+          echo "${{ env.PREFIX }}/share/*" >> "$SPEC"
+        fi
 
         echo ""                           >> $SPEC
         echo "%changelog"                 >> $SPEC

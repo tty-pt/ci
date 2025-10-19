@@ -92,7 +92,7 @@ brew install <package>
 SUFFIX=$(uname -r)/packages/$(uname -m)
 MY="https://tty.pt/openbsd/$SUFFIX/"
 OFF="$(cat /etc/installurl)/$SUFFIX/"
-TRUSTED_PKG_PATH="$MY" PKG_PATH="$OFF" doas pkg_add -DIu <package>
+doas env PKG_PATH="$MY:$OFF" pkg_add <package>
 ```
 
 ### Building from Source:
