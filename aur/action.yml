@@ -10,7 +10,7 @@ inputs:
     description: 'The name of the package in the Arch User Repository (AUR).'
     required: true
   format:
-    description: 'PM Format (e.g., msys, pacman).'
+    description: 'PM Format (e.g., pacman_mingw, pacman).'
     required: true
   repo:
     description: 'Override "format" as target folder'
@@ -40,7 +40,7 @@ runs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
 
         # Set PREFIX based on format
-        if [ "${{ inputs.format }}" = "msys" ]; then
+        if [ "${{ inputs.format }}" = "pacman_mingw" ]; then
           echo "PREFIX=/mingw64" >> $GITHUB_ENV
         else
           echo "PREFIX=/usr" >> $GITHUB_ENV
@@ -62,7 +62,7 @@ runs:
         echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
 
     - name: Add Repo (PACMAN)
-      if: inputs.format == 'pacman' || inputs.format == 'msys'
+      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
       shell: sh
       run: |
         URL="https://${{ inputs.host }}/${{ env.REPO }}"
@@ -78,7 +78,7 @@ runs:
         pacman -Sy --noconfirm
 
     - name: Install prerequisites (PACMAN)
-      if: inputs.format == 'pacman' || inputs.format == 'msys'
+      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
       shell: sh
       run: |
         deps="${{ inputs.deps }}"

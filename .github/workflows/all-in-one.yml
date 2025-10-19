@@ -43,7 +43,7 @@ on:
         required: false
         default: ''
         type: string
-      deps_msys:
+      deps_pacman_mingw:
         description: 'Msys dependency names'
         required: false
         default: ''
@@ -51,7 +51,7 @@ on:
       publish_to:
         description: "Package managers to publish to"
         required: false
-        default: "deb,apk,pacman,rpm,brew,openbsd,msys"
+        default: "deb,apk,pacman,rpm,brew,openbsd,pacman_mingw"
         type: string
       repo_name:
         description: "Repository name for pacman and RPM"
@@ -98,7 +98,7 @@ jobs:
           - format: rpm
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/rocky-builder:latest
-          - format: msys
+          - format: pacman_mingw
             repo: pacman
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/msys-builder:latest
@@ -119,13 +119,13 @@ jobs:
           name: ${{ inputs.name }}
           format: ${{ matrix.format }}
           repo: ${{ matrix.repo }}
-          ext: ${{ (matrix.format == 'pacman' || matrix.format == 'msys') && 'pkg.tar.*' || '' }}
+          ext: ${{ (matrix.format == 'pacman' || matrix.format == 'pacman_mingw') && 'pkg.tar.*' || '' }}
           deps: ${{ inputs.deps }}
           deps_deb: ${{ inputs.deps_deb || '' }}
           deps_apk: ${{ inputs.deps_apk || '' }}
           deps_pacman: ${{ inputs.deps_pacman || '' }}
           deps_rpm: ${{ inputs.deps_rpm || '' }}
-          deps_msys: ${{ inputs.deps_msys || '' }}
+          deps_pacman_mingw: ${{ inputs.deps_pacman_mingw || '' }}
           deps_brew: ${{ inputs.deps_brew || '' }}
           deps_openbsd: ${{ inputs.deps_openbsd || '' }}
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -157,7 +157,7 @@ jobs:
           - format: rpm
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/rocky-builder:latest
-          - format: msys
+          - format: pacman_mingw
             repo: pacman
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/arch-builder:latest

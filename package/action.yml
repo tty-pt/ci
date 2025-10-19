@@ -49,7 +49,7 @@ inputs:
     description: 'OpenBSD dependency names'
     required: false
     default: ''
-  deps_msys:
+  deps_pacman_mingw:
     description: 'Msys dependency names'
     required: false
     default: ''
@@ -129,7 +129,7 @@ runs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
 
         # Set PREFIX based on format
-        if [ "${{ inputs.format }}" = "msys" ]; then
+        if [ "${{ inputs.format }}" = "pacman_mingw" ]; then
           echo "PREFIX=/mingw64" >> $GITHUB_ENV
         else
           echo "PREFIX=/usr" >> $GITHUB_ENV
@@ -167,7 +167,7 @@ runs:
       shell: sh
 
     - name: Add Repo (PACMAN)
-      if: inputs.format == 'pacman' || inputs.format == 'msys'
+      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
       shell: sh
       run: |
         URL="https://${{ inputs.host }}/${{ env.REPO }}"
@@ -237,12 +237,12 @@ runs:
 
 
     - name: Install prerequisites (PACMAN)
-      if: inputs.format == 'pacman' || inputs.format == 'msys'
+      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
       run: |
         if test "${{ inputs.format }}" = "pacman"; then
           deps="${{ inputs.deps_pacman || inputs.deps }}"
         else
-          deps="${{ inputs.deps_msys || inputs.deps }}"
+          deps="${{ inputs.deps_pacman_mingw || inputs.deps }}"
         fi
         echo "deps=$deps" > $GITHUB_ENV
 
@@ -405,7 +405,7 @@ runs:
       if: inputs.format != 'brew' && inputs.format != 'openbsd'
       run: |
         export PATH="/usr/bin:/bin:$PATH"
-        test "${{ inputs.format }}" != "msys" || export cross=Msys
+        test "${{ inputs.format }}" != "pacman_mingw" || export cross=Msys
 
         find /usr/mingw64 -type f || true
         make
@@ -469,11 +469,11 @@ runs:
         chown -R builder:builder /home/builder/.abuild
       shell: sh
 
-    - name: Generate PKGBUILD (PACMAN + MSYS)
-      if: inputs.format == 'pacman' || inputs.format == 'msys'
+    - name: Generate PKGBUILD (PACMAN + PACMAN_MINGW)
+      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
       shell: sh
       run: |
-        if [ "${{ inputs.format }}" = "msys" ]; then
+        if [ "${{ inputs.format }}" = "pacman_mingw" ]; then
           PKG_NAME="mingw-w64-${{ inputs.name }}"
         else
           PKG_NAME="${{ inputs.name }}"
@@ -502,8 +502,8 @@ runs:
           echo "}"
         } > PKGBUILD
 
-    - name: Build package (PACMAN + MSYS)
-      if: inputs.format == 'pacman' || inputs.format == 'msys'
+    - name: Build package (PACMAN + PACMAN_MINGW)
+      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
       run: |
         mkdir -p ${{ env.iden }}
         chown -R builder:builder "$PWD"
@@ -521,7 +521,7 @@ runs:
       shell: sh
 
     - name: Build Msys zip
-      if: inputs.format == 'msys'
+      if: inputs.format == 'pacman_mingw'
       shell: sh
       run: |
         cd ${{ env.iden }}
@@ -579,7 +579,7 @@ runs:
         echo "✅ Done: ${{ env.ofile }}.zip"
 
     - name: Build setup.exe with Inno Setup (headless, no GUI)
-      if: inputs.format == 'msys' && env.skip_installer != 'true'
+      if: inputs.format == 'pacman_mingw' && env.skip_installer != 'true'
       shell: bash
       run: |
         set -e
@@ -772,10 +772,10 @@ runs:
         ls -l ${{ env.iden }}/
       shell: sh
 
-    - name: Sign package (PACMAN + DEB + MSYS)
+    - name: Sign package (PACMAN + DEB + PACMAN_MINGW)
       if: (inputs.format == 'pacman'
         || inputs.format == 'deb'
-        || inputs.format == 'msys')
+        || inputs.format == 'pacman_mingw')
         && inputs.gpg_key != ''
       run: |
         ext=${{ inputs.ext || inputs.format }}
