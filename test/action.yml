@@ -1,0 +1,45 @@
+name: 'test'
+description: 'Run full test suite with dependencies'
+author: 'tty-pt'
+
+inputs:
+  deps:
+    description: 'Generic dependency list'
+    required: false
+    default: ''
+  deps_deb:
+    description: 'Debian dependency list'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure tty.pt APT repo
+      shell: sh
+      run: |
+        echo "deb [trusted=yes] http://tty.pt/deb stable main" | sudo tee /etc/apt/sources.list.d/ttypt.list
+        sudo apt-get update -y || true
+
+    - name: Install dependencies
+      shell: sh
+      run: |
+        deps="${{ inputs.deps_deb || inputs.deps }}"
+        echo "Installing: $deps"
+        sudo rm -f /var/lib/man-db/auto-update
+        if [ -n "$deps" ]; then
+          sudo apt-get install -y $(echo "$deps" | tr ',' ' ')
+        fi
+
+    - name: Fetch mk includes
+      shell: sh
+      run: git clone --branch main https://github.com/tty-pt/mk ../mk
+
+    - name: Build and test
+      shell: sh
+      run: |
+        make
+        export LD_LIBRARY_PATH=$PWD/lib:${LD_LIBRARY_PATH}
+        make test

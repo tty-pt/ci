@@ -201,6 +201,7 @@ runs:
         deps="${{ inputs.deps_apk || inputs.deps }}"
         echo "deps=$deps" > $GITHUB_ENV
 
+        apk add --no-cache doxygen
         if [ -n "$deps" ]; then
           apk add --no-cache $(echo "$deps" | tr ',' ' ')
         fi
@@ -213,6 +214,7 @@ runs:
         echo "deps=$deps" > $GITHUB_ENV
 
         sudo rm -f /var/lib/man-db/auto-update
+        sudo apt-get install -y doxygen
         if [ -n "$deps" ]; then
           sudo apt-get install -y $(echo "$deps" | tr ',' ' ')
         fi
@@ -227,6 +229,7 @@ runs:
 
         microdnf --noplugins repolist || true
 
+        microdnf --noplugins install -y doxygen
         if [ -n "$deps" ]; then
           echo "Installing dependencies: $deps"
           microdnf --noplugins \
@@ -246,7 +249,7 @@ runs:
         fi
         echo "deps=$deps" > $GITHUB_ENV
 
-        pacman -Sy --noconfirm zip
+        pacman -Sy --noconfirm zip doxygen
         if [ -n "$deps" ]; then
           pacman -S --noconfirm $(echo "$deps" | tr ',' ' ')
         fi
@@ -258,6 +261,7 @@ runs:
         deps="${{ inputs.deps_brew || inputs.deps }}"
         echo "deps=$deps" > $GITHUB_ENV
 
+        brew install doxygen
         if [ -n "$deps" ]; then
           for dep in $(echo "$deps" | tr ',' ' '); do
             brew install "$dep" || true
@@ -295,6 +299,8 @@ runs:
         OFF="$(cat /etc/installurl)/$SUFFIX/"
         stage=stage-${{ env.iden }}
 
+        pkg_delete -I -Ddependencies ${{ inputs.name }} || true
+
         deps="$(echo ${{ env.deps }} | tr ',' ' ')"
         echo "📦 Installing dependencies '$deps'..."
         if test ! -z "$deps"; then
@@ -313,6 +319,7 @@ runs:
         cd ${{ inputs.name }}
 
         make
+        make docs || true
         make DESTDIR=../$stage install
         cd ../$stage
 
@@ -399,6 +406,7 @@ runs:
 
         find /usr/mingw64 -type f || true
         make
+        make docs || true
         make DESTDIR=$PWD/stage install
       shell: sh
 
@@ -410,6 +418,7 @@ runs:
         arch="$(uname -m)"
         echo "🔧 Building for architecture: $arch"
         make
+        make docs || true
         make DESTDIR=$PWD/stage/$arch \
           PREFIX=${{ env.prefix }} install
 
