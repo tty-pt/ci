@@ -71,7 +71,7 @@ runs:
           cat <<EOF | tee -a /etc/pacman.conf
         [${{ env.REPO_NAME }}]
         SigLevel = Never
-        Server = https://tty.pt/${{ env.REPO }}/\$arch
+        Server = https://${{ inputs.host }}/${{ env.REPO }}/\$arch
         EOF
         fi
 

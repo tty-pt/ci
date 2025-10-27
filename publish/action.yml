@@ -74,7 +74,7 @@ runs:
         USER="${{ inputs.user }}"
 
         cat > $HOME/.ssh/config <<EOF
-        Host tty.pt
+        Host ${{ inputs.host }}
           HostName $HOSTNAME
           User $USER
           IdentityFile $HOME/.ssh/id_ed25519
@@ -246,14 +246,14 @@ runs:
       if: inputs.abuild_key != '' && inputs.format == 'apk'
       run: |
         mkdir -p /home/builder/.abuild
-        echo "${{ inputs.abuild_key }}" > /home/builder/.abuild/ttypt.rsa
-        chmod 600 /home/builder/.abuild/ttypt.rsa
+        echo "${{ inputs.abuild_key }}" > /home/builder/.abuild/${{ env.REPO_NAME }}.rsa
+        chmod 600 /home/builder/.abuild/${{ env.REPO_NAME }}.rsa
 
-        echo "${{ inputs.abuild_pub }}" > /home/builder/.abuild/ttypt.rsa.pub
-        chmod 644 /home/builder/.abuild/ttypt.rsa.pub
+        echo "${{ inputs.abuild_pub }}" > /home/builder/.abuild/${{ env.REPO_NAME }}.rsa.pub
+        chmod 644 /home/builder/.abuild/${{ env.REPO_NAME }}.rsa.pub
 
-        echo "PACKAGER_PRIVKEY=/home/builder/.abuild/ttypt.rsa" > /home/builder/.abuild/abuild.conf
-        echo "PACKAGER='tty.pt repo <repo@tty.pt>'" >> /home/builder/.abuild/abuild.conf
+        echo "PACKAGER_PRIVKEY=/home/builder/.abuild/${{ env.REPO_NAME }}.rsa" > /home/builder/.abuild/abuild.conf
+        echo "PACKAGER='${{ inputs.host }} repo <repo@${{ inputs.host }}>'" >> /home/builder/.abuild/abuild.conf
         chown -R builder:builder /home/builder/.abuild
       shell: sh
 
@@ -271,10 +271,10 @@ runs:
         if [ -n "${{ inputs.abuild_key }}" ]; then
           echo "Signing APKINDEX..."
           mkdir -p /root/.abuild
-          echo "${{ inputs.abuild_key }}" > /root/.abuild/ttypt.rsa
-          chmod 600 /root/.abuild/ttypt.rsa
-          export PACKAGER_REPOSITORY='@ttypt'
-          abuild-sign -k /root/.abuild/ttypt.rsa APKINDEX.tar.gz
+          echo "${{ inputs.abuild_key }}" > /root/.abuild/${{ env.REPO_NAME }}.rsa
+          chmod 600 /root/.abuild/${{ env.REPO_NAME }}.rsa
+          export PACKAGER_REPOSITORY='@${{ env.REPO_NAME }}'
+          abuild-sign -k /root/.abuild/${{ env.REPO_NAME }}.rsa APKINDEX.tar.gz
         else
           echo "⚠️ No abuild key provided — APKINDEX left unsigned."
         fi
@@ -282,7 +282,7 @@ runs:
         if [ -n "${{ inputs.abuild_pub }}" ]; then
           echo "Updating public key..."
           mkdir -p ../keys
-          echo "${{ inputs.abuild_pub }}" > ../keys/ttypt.rsa.pub
+          echo "${{ inputs.abuild_pub }}" > ../keys/${{ env.REPO_NAME }}.rsa.pub
         fi
 
         cd ..
@@ -319,10 +319,10 @@ runs:
         {
           echo "[${{ env.REPO_NAME }}]"
           echo "name=${{ env.REPO_NAME }} Repository"
-          echo "baseurl=https://tty.pt/rpm/\$basearch"
+          echo "baseurl=https://${{ inputs.host }}/rpm/\$basearch"
           echo "enabled=1"
           echo "gpgcheck=1"
-          echo "gpgkey=https://tty.pt/rpm/RPM-GPG-KEY-${{ env.REPO_NAME }}"
+          echo "gpgkey=https://${{ inputs.host }}/rpm/RPM-GPG-KEY-${{ env.REPO_NAME }}"
         } > "${{ env.REPO_NAME }}.repo"
 
         # export public GPG key if any
@@ -366,7 +366,7 @@ runs:
         {
           echo "[${{ env.REPO_NAME }}]"
           echo "SigLevel = Required DatabaseOptional"
-          echo "Server = https://tty.pt/${{ env.REPO }}/\$arch"
+          echo "Server = https://${{ inputs.host }}/${{ env.REPO }}/\$arch"
         } > "${{ env.REPO_NAME }}.conf"
 
         if [ -n "${{ inputs.gpg_keyid }}" ]; then
@@ -472,9 +472,8 @@ runs:
       run: |
         echo "🦫 Publishing OpenBSD packages..."
 
-        REL=$(ssh -F "$HOME/.ssh/config" ${{ inputs.host }} "uname -r")
         ARCH=$(ssh -F "$HOME/.ssh/config" ${{ inputs.host }} "uname -m")
-        TARGET="/var/www/htdocs/openbsd/$REL/packages/$ARCH"
+        TARGET="/var/www/htdocs/openbsd/$ARCH"
 
         scp -F $HOME/.ssh/config \
         ./dist/${{ env.iden }}/${{ env.ofile }}.tgz \

@@ -106,7 +106,7 @@ runs:
         USER="${{ inputs.user }}"
 
         cat > $HOME/.ssh/config <<EOF
-        Host tty.pt
+        Host ${{ inputs.host }}
           HostName $HOSTNAME
           User $USER
           IdentityFile $HOME/.ssh/id_ed25519
@@ -156,12 +156,12 @@ runs:
       run: |
         echo "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main" > /etc/apk/repositories
         echo "https://dl-cdn.alpinelinux.org/alpine/latest-stable/community" >> /etc/apk/repositories
-        echo "http://tty.pt/apk" >> /etc/apk/repositories
+        echo "http://${{ inputs.host }}/apk" >> /etc/apk/repositories
 
-        # Trust tty.pt key to silence 'UNTRUSTED signature'
         mkdir -p /etc/apk/keys
-        wget -O /etc/apk/keys/ttypt.rsa.pub https://tty.pt/apk/keys/ttypt.rsa.pub || true
-        chmod 644 /etc/apk/keys/ttypt.rsa.pub || true
+        wget -O /etc/apk/keys/${{ env.REPO_NAME }}.rsa.pub \
+          https://${{ inputs.host }}/apk/keys/${{ env.REPO_NAME }}.rsa.pub || true
+        chmod 644 /etc/apk/keys/${{ env.REPO_NAME }}.rsa.pub || true
 
         apk update || true
       shell: sh
@@ -176,7 +176,7 @@ runs:
           cat <<EOF | tee -a /etc/pacman.conf
         [${{ env.REPO_NAME }}]
         SigLevel = Never
-        Server = https://tty.pt/${{ env.REPO }}/\$arch
+        Server = https://${{ inputs.host }}/${{ env.REPO }}/\$arch
         EOF
         fi
 
@@ -185,7 +185,7 @@ runs:
     - name: Add Repo (APT)
       if: inputs.format == 'deb'
       run: |
-        echo "deb [trusted=yes] http://tty.pt/deb stable main" | sudo tee /etc/apt/sources.list.d/ttypt.list
+        echo "deb [trusted=yes] http://${{ inputs.host }}/deb stable main" | sudo tee /etc/apt/sources.list.d/ttypt.list
         sudo apt-get update -y || true
       shell: sh
 
@@ -295,7 +295,7 @@ runs:
         ssh -F $HOME/.ssh/config ${{ inputs.host }} doas /usr/local/sbin/ci-chroot <<'EOF'
         set -eu
         SUFFIX=$(uname -r)/packages/$(uname -m)
-        MY="https://tty.pt/openbsd/$SUFFIX/"
+        MY="https://${{ inputs.host }}/openbsd/$(uname -m)/"
         OFF="$(cat /etc/installurl)/$SUFFIX/"
         stage=stage-${{ env.iden }}
 
@@ -304,7 +304,7 @@ runs:
         deps="$(echo ${{ env.deps }} | tr ',' ' ')"
         echo "📦 Installing dependencies '$deps'..."
         if test ! -z "$deps"; then
-          PKG_PATH="$MY:$OFF" pkg_add -DIu $deps
+          PKG_PATH="$MY:$OFF" pkg_add -aDIu $deps
         fi
 
         cd /usr/src
@@ -333,8 +333,8 @@ runs:
             for dep in $deps; do
 
               echo DEP $dep >&2
-              name="$(pkg_info -f $dep | grep ^@name | awk '{print $2}')"
-              cate="$(pkg_info -f $dep | grep ^@comment | awk '{print $2}' | awk -F= '{print $2}')"
+              name="$(pkg_info -f $dep | grep ^@name | head -n 1 | awk '{print $2}')"
+              cate="$(pkg_info -f $dep | grep ^@comment | head -n 1 | awk '{print $2}' | awk -F= '{print $2}')"
               cate="$(echo $cate | awk -F/ '{print $1}')"
               echo "@depend $cate:=:$name"
             done
@@ -360,7 +360,7 @@ runs:
           -d ../dist-openbsd/DESC \
           -D COMMENT="short description" \
           -D FULLPKGPATH="${{ inputs.name }}" \
-          -D MAINTAINER="repo@tty.pt" \
+          -D MAINTAINER="repo@${{ inputs.host }}" \
           -p / \
           ../dist-openbsd/$obsd_file
 
@@ -457,14 +457,14 @@ runs:
       if: inputs.abuild_key != '' && inputs.format == 'apk'
       run: |
         mkdir -p /home/builder/.abuild
-        echo "${{ inputs.abuild_key }}" > /home/builder/.abuild/ttypt.rsa
-        chmod 600 /home/builder/.abuild/ttypt.rsa
+        echo "${{ inputs.abuild_key }}" > /home/builder/.abuild/${{ env.REPO_NAME }}.rsa
+        chmod 600 /home/builder/.abuild/${{ env.REPO_NAME }}.rsa
 
-        echo "${{ inputs.abuild_pub }}" > /home/builder/.abuild/ttypt.rsa.pub
-        chmod 644 /home/builder/.abuild/ttypt.rsa.pub
+        echo "${{ inputs.abuild_pub }}" > /home/builder/.abuild/${{ env.REPO_NAME }}.rsa.pub
+        chmod 644 /home/builder/.abuild/${{ env.REPO_NAME }}.rsa.pub
 
-        echo "PACKAGER_PRIVKEY=/home/builder/.abuild/ttypt.rsa" > /home/builder/.abuild/abuild.conf
-        echo "PACKAGER='tty.pt repo <repo@tty.pt>'" >> /home/builder/.abuild/abuild.conf
+        echo "PACKAGER_PRIVKEY=/home/builder/.abuild/${{ env.REPO_NAME }}.rsa" > /home/builder/.abuild/abuild.conf
+        echo "PACKAGER='${{ inputs.host }} repo <repo@${{ inputs.host }}>'" >> /home/builder/.abuild/abuild.conf
         chown -R builder:builder /home/builder/.abuild
       shell: sh
 
@@ -530,15 +530,17 @@ runs:
         curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/scripts/rldd.sh -o rldd.sh
         chmod +x rldd.sh
 
+        find extracted -type d -name bin
         bin_dir=$(find extracted -type d -name bin | head -n1 || true)
-        if [ -n "$bin_dir" ]; then
+        find $bin_dir -type f
+        if [ -z "$bin_dir" ]; then
           rm -rf extracted zip
           echo "skip_installer=true" >> $GITHUB_ENV
+          echo SKIP
           exit 0
         fi
 
         export PATH="/mingw64/bin:/mingw64/lib:$PATH"
-        bin_dir=$(find extracted -type d -name bin | head -n1)
         export RLDD="x86_64-w64-mingw32-ldd"
         export RLDD_PATH="/usr/x86_64-w64-mingw32/bin/:/usr/x86_64-w64-mingw32/lib:/mingw64/lib:/mingw64/bin"
         export RLDD_SO="dll"
@@ -549,7 +551,7 @@ runs:
         for exe in "$bin_dir"/*; do
           if file "$exe" | grep -q "PE32"; then
             echo "→ Collecting dependencies for $(basename "$exe")"
-            case "$var" in
+            case "$exe" in
               *.exe) has_exe=1 ;;
             esac
             cp -n "$exe" zip/
@@ -587,6 +589,7 @@ runs:
       run: |
         set -e
 
+        pacman -Sy --noconfirm wine xorg-server-xvfb
         export WINEARCH=win64
         export WINEPREFIX="$PWD/wineprefix"
         rm -rf "$WINEPREFIX"
@@ -607,7 +610,7 @@ runs:
         unzip -o "${{ env.iden }}/${{ env.ofile }}.zip" -d zip
         which wine
         xvfb-run -a wine "C:\\innosetup\\ISCC.exe" installer.iss
-        mv Output/fb-rpg-setup.exe "${{ env.iden }}/${{ env.ofile }}-setup.exe"
+        mv Output/${{ inputs.name }}-setup.exe "${{ env.iden }}/${{ env.ofile }}-setup.exe"
         rm -rf \
           zip wineprefix Output is.exe \
           installer.iss installer.template.iss \
@@ -618,7 +621,7 @@ runs:
       if: inputs.format == 'apk'
       run: |
         {
-          echo "# Maintainer: tty.pt repo <repo@tty.pt>"
+          echo "# Maintainer: ${{ inputs.host }} repo <repo@${{ inputs.host }}>"
           echo "pkgname=${{ inputs.name }}"
           echo "pkgver=${{ env.VERSION }}"
           echo "pkgrel=1"
@@ -626,7 +629,7 @@ runs:
           echo "url=\"https://github.com/${{ github.repository }}\""
           echo "arch=\"$(uname -m)\""
           echo "license=\"MIT\""
-          echo "maintainer=\"tty.pt repo <repo@tty.pt>\""
+          echo "maintainer=\"${{ inputs.host }} repo <repo@${{ inputs.host }}>\""
           if [ -n "${{ env.deps }}" ]; then
             echo "depends=\"$(echo ${{ env.deps }} | tr ',' ' ')\""
           fi
@@ -653,7 +656,7 @@ runs:
         su builder -c '
           cd "$PWD"
           echo "Running abuild"
-          export PACKAGER_REPOSITORY=@ttypt
+          export PACKAGER_REPOSITORY=@${{ env.REPO_NAME }}
           abuild -r
           
           find /home/builder/packages -name "*.apk" -exec mv {} ${{ env.iden }}/${{ env.arch }} \;
@@ -731,7 +734,7 @@ runs:
 
         echo ""                           >> $SPEC
         echo "%changelog"                 >> $SPEC
-        echo "* $DATE tty-pt <noreply@github.com> - ${{ env.VERSION }}-1" >> $SPEC
+        echo "* $DATE ${{ env.REPO_NAME }} <noreply@github.com> - ${{ env.VERSION }}-1" >> $SPEC
         echo "- Auto-generated build"     >> $SPEC
       shell: sh
 
@@ -762,7 +765,7 @@ runs:
           echo "Section: utils"
           echo "Priority: optional"
           echo "Architecture: amd64"
-          echo "Maintainer: tty.pt repo <repo@tty.pt>"
+          echo "Maintainer: ${{ inputs.host }} repo <repo@${{ inputs.host }}>"
           echo "Description: ${{ inputs.name }} binary package"
           deps_clean=$(echo "${{ env.deps }}" | tr -d '"' | tr ',' ', ')
           if [ -n "$deps_clean" ]; then
@@ -808,7 +811,7 @@ runs:
           cd "$PWD"
           for pkg in $( find ${{ env.iden }}.-type f ); do
             echo "Signing $pkg"
-            abuild-sign -k /home/builder/.abuild/ttypt.rsa "$pkg"
+            abuild-sign -k /home/builder/.abuild/${{ env.REPO_NAME }}.rsa "$pkg"
           done
         '
       shell: sh
