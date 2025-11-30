@@ -87,6 +87,9 @@ runs:
   using: 'composite'
   steps:
     - uses: actions/checkout@v4
+      with:
+        submodules: true
+        fetch-depth: 0
 
     - name: Configure SSH for Host
       if: inputs.format == 'openbsd'
