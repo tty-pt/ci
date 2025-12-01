@@ -321,7 +321,7 @@ runs:
 
         cd ${{ inputs.name }}
 
-        make
+        make DESTDIR=$PWD/stage
         make docs || true
         make DESTDIR=../$stage install
         cd ../$stage
@@ -408,7 +408,7 @@ runs:
         test "${{ inputs.format }}" != "pacman_mingw" || export cross=Msys
 
         find /usr/mingw64 -type f || true
-        make
+        make DESTDIR=$PWD/stage
         make docs || true
         make DESTDIR=$PWD/stage install
       shell: sh
@@ -420,7 +420,8 @@ runs:
 
         arch="$(uname -m)"
         echo "🔧 Building for architecture: $arch"
-        make
+        make DESTDIR=$PWD/stage/$arch \
+          PREFIX=${{ env.prefix }}
         make docs || true
         make DESTDIR=$PWD/stage/$arch \
           PREFIX=${{ env.prefix }} install
