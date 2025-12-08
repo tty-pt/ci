@@ -109,7 +109,7 @@ jobs:
             runner: macos-latest
           - format: brew
             arch: x86_64
-            runner: macos-13
+            runner: macos-15-intel
 
     steps:
       - name: Package for ${{ matrix.format }} (${{ matrix.arch || 'default' }})
@@ -168,7 +168,7 @@ jobs:
             runner: macos-latest
           - format: brew
             arch: x86_64
-            runner: macos-13
+            runner: macos-15-intel
 
     steps:
       - name: Publish ${{ matrix.format }}
