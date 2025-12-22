@@ -9,10 +9,10 @@ We distribute our packages for the different package managers and different oper
 At least once in your life you need to:
 ```sh
 # Download and add the key
-wget -qO- https://tty.pt/apt/archive-key.gpg \
+wget -qO- https://tty.pt/apt/keyrings/archive-key.gpg \
     | sudo tee /etc/apt/keyrings/ttypt.asc > /dev/null
 
-echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/ttypt.asc] https://tty.pt/apt stable main" \
+echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/ttypt.asc] https://tty.pt/deb stable main" \
     | sudo tee /etc/apt/sources.list.d/ttypt.list
 ```
 
