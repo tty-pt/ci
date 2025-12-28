@@ -53,6 +53,14 @@ inputs:
     description: 'Msys dependency names'
     required: false
     default: ''
+  deps_aur:
+    description: 'Arch AUR dependency names'
+    required: false
+    default: ''
+  deps_aur_mingw:
+    description: 'Arch AUR mingw dependency names'
+    required: false
+    default: ''
   abuild_key:
     description: 'ABUILD key'
     required: false
@@ -197,6 +205,34 @@ runs:
       run: |
         brew tap tty-pt/tap https://github.com/tty-pt/tap.git
       shell: sh
+
+    - name: Install yay (PACMAN)
+      if: >
+        (inputs.format == 'pacman' && inputs.deps_aur != '') ||
+        (inputs.format == 'pacman_mingw' && inputs.deps_aur_mingw != '')
+      shell: sh
+      run: |
+        if ! command -v yay >/dev/null 2>&1; then
+          pacman -Sy --noconfirm --needed git base-devel
+          useradd -m -s /bin/bash aur || true
+          echo "aur ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+          sudo -u aur sh -c '
+            cd /home/aur
+            git clone https://aur.archlinux.org/yay.git
+            cd yay
+            makepkg -si --noconfirm
+          '
+        fi
+
+        if [ "${{ inputs.format }}" = "pacman" ]; then
+          deps_aur="${{ inputs.deps_aur }}"
+        else
+          deps_aur="${{ inputs.deps_aur_mingw }}"
+        fi
+
+        sudo -u aur yay -S --noconfirm --needed \
+          $(echo "$deps_aur" | tr ',' ' ')
 
     - name: Install prerequisites (APK)
       if: inputs.format == 'apk'

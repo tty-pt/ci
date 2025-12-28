@@ -48,6 +48,16 @@ on:
         required: false
         default: ''
         type: string
+      deps_aur:
+        description: 'Arch AUR dependency names'
+        required: false
+        default: ''
+        type: string
+      deps_aur_mingw:
+        description: 'Arch AUR mingw dependency names'
+        required: false
+        default: ''
+        type: string
       publish_to:
         description: "Package managers to publish to"
         required: false
@@ -124,8 +134,10 @@ jobs:
           deps_deb: ${{ inputs.deps_deb || '' }}
           deps_apk: ${{ inputs.deps_apk || '' }}
           deps_pacman: ${{ inputs.deps_pacman || '' }}
+          deps_aur: ${{ inputs.deps_aur || '' }}
           deps_rpm: ${{ inputs.deps_rpm || '' }}
           deps_pacman_mingw: ${{ inputs.deps_pacman_mingw || '' }}
+          deps_aur_mingw: ${{ inputs.deps_aur_mingw || '' }}
           deps_brew: ${{ inputs.deps_brew || '' }}
           deps_openbsd: ${{ inputs.deps_openbsd || '' }}
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
