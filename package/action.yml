@@ -614,6 +614,7 @@ runs:
           exit 0
         fi
 
+        find extracted/mingw64/share/ -name -f
         if [ -d extracted/mingw64/share ]; then
           cp -r extracted/mingw64/share/${{ inputs.name }}/* zip/
         fi
