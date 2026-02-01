@@ -8,7 +8,6 @@ OutputBaseFilename=APP_NAME-setup
 Compression=lzma
 SolidCompression=yes
 DisableWelcomePage=yes
-SetupIconFile=zip\resources\icon.ico
 
 [Files]
 Source: "zip\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
