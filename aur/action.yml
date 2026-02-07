@@ -104,8 +104,26 @@ runs:
         export GPG_OPTS="--pinentry-mode loopback --passphrase ${{ inputs.gpg_pass }}"
       shell: sh
 
+    - name: Check if package already exists on server
+      id: checkpkg
+      shell: sh
+      run: |
+        PKG="${{ inputs.name }}-${{ env.VERSION }}-${{ inputs.format }}-${{ env.arch }}.pkg.tar.zst"
+        URL="https://${{ inputs.host }}/${{ env.REPO }}/${{ env.arch }}/$PKG"
+
+        echo "Checking $URL"
+
+        if curl -sSf --http1.1 --ipv4 --connect-timeout 3 --max-time 6 -I "$URL" >/dev/null; then
+          echo "Package already exists. Skipping build."
+          echo "SKIP_BUILD=true" >> $GITHUB_ENV
+        else
+          echo "Package not found. Will build."
+          echo "SKIP_BUILD=false" >> $GITHUB_ENV
+        fi
+
     - name: Build AUR Package
       shell: bash
+      if: env.SKIP_BUILD != 'true'
       run: |
         # This entire script is executed as the 'builder' user
         sudo -u builder bash -s -- \
@@ -142,13 +160,25 @@ runs:
         SCRIPT
 
     - name: Stage Artifacts
+      if: env.SKIP_BUILD != 'true'
       shell: sh
       run: |
-        mkdir -p ${{ env.iden }}
-        echo "Moving built packages to artifact directory..."
-        mv ./${{ inputs.name }}/*.pkg.tar.zst* ${{ env.iden }}/
-        echo "Contents of artifact directory:"
-        ls -l ${{ env.iden }}
+        mkdir -p "${{ env.iden }}"
+
+        for f in ./${{ inputs.name }}/*.pkg.tar.zst*; do
+          base="$(basename "$f")"
+          safe="$(echo "$base" | tr ':' '_')"
+          cp "$f" "${{ env.iden }}/$safe"
+        done
+
+        ls -l "${{ env.iden }}"
+
+    - name: Create skip marker
+      if: env.SKIP_BUILD == 'true'
+      shell: sh
+      run: |
+        mkdir -p "${{ env.iden }}"
+        echo "SKIPPED (package already exists upstream)" > "${{ env.iden }}/SKIPPED"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
