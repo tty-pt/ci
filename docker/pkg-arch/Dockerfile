@@ -1,14 +1,17 @@
+# syntax=docker/dockerfile:1.7
 # Arch builder & publisher image for tty.pt
 FROM archlinux:latest
 
 LABEL maintainer="repo@tty.pt"
+LABEL org.opencontainers.image.source="https://github.com/tty-pt"
 LABEL description="Unified Arch Linux image for building and publishing .pkg.tar.zst packages"
 
 ARG PARALLEL_DL=10
 
-ENV LANG=C.UTF-8
-ENV MAKEFLAGS="-j$(nproc)"
-ENV GPG_TTY=/dev/tty
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    MAKEFLAGS="-j$(nproc)" \
+    GPG_TTY=/dev/tty
 
 # ---------- pacman.conf mínimo e estável ----------
 RUN set -eu; \
@@ -18,12 +21,16 @@ RUN set -eu; \
   printf 'Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch\n' > /etc/pacman.d/mirrorlist
 
 # ---------- Keyring (ordem correta) ----------
-RUN pacman-key --init && \
-    pacman-key --populate archlinux && \
-    pacman -Sy --noconfirm archlinux-keyring
+RUN --mount=type=cache,target=/var/lib/pacman/sync \
+    --mount=type=cache,target=/var/cache/pacman/pkg \
+  pacman-key --init && \
+  pacman-key --populate archlinux && \
+  pacman -Sy --noconfirm archlinux-keyring
 
 # ---------- Base build stack ----------
-RUN pacman -S --noconfirm --needed \
+RUN --mount=type=cache,target=/var/lib/pacman/sync \
+    --mount=type=cache,target=/var/cache/pacman/pkg \
+  pacman -S --noconfirm --needed \
       base-devel \
       pacman-contrib \
       gnupg \
@@ -35,12 +42,16 @@ RUN pacman -S --noconfirm --needed \
       zstd \
       curl \
       sudo && \
-    pacman -Scc --noconfirm
+  pacman -Scc --noconfirm
+
+# ---------- Limpeza ----------
+RUN rm -rf /usr/share/man/* /usr/share/doc/*
 
 # ---------- Utilizador builder (compatível com GitHub runners) ----------
 RUN groupadd -g 1001 builder && \
     useradd -m -u 1001 -g 1001 builder && \
-    echo 'builder ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers && \
+    echo 'builder ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/builder && \
+    chmod 440 /etc/sudoers.d/builder && \
     mkdir -p /home/builder/.gnupg && \
     chmod 700 /home/builder/.gnupg && \
     chown -R builder:builder /home/builder

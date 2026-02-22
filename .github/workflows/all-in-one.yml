@@ -111,7 +111,7 @@ jobs:
           - format: pacman_mingw
             repo: pacman
             runner: ubuntu-latest
-            image: ghcr.io/tty-pt/msys-builder:latest
+            image: ghcr.io/tty-pt/mingw-builder:latest
           - format: openbsd
             runner: ubuntu-latest
           - format: brew
@@ -172,7 +172,7 @@ jobs:
           - format: pacman_mingw
             repo: pacman
             runner: ubuntu-latest
-            image: ghcr.io/tty-pt/arch-builder:latest
+            image: ghcr.io/tty-pt/mingw-builder:latest
           - format: openbsd
             runner: ubuntu-latest
           - format: brew
