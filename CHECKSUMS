@@ -1,0 +1,10 @@
+# CHECKSUMS for large artifacts (sha256)
+# Generated: sha256sum docker/pkg-msys/msys-builder.tar.zst docker/pkg-msys/msys2-base-x86_64-20250830.tar.zst \
+#            docker/pkg-msys/win10.qcow2 vms/alpine/alpine.qcow2 \
+#            vms/alpine/alpine-standard-3.22.1-x86_64.iso
+
+4cd1db93ab00aa4f6e45e1a7e21814dffcd26a956ffc6f1954fbd08aba045259  docker/pkg-msys/msys-builder.tar.zst
+a6c00b86ca0cd7fffc8a0a35142f7b17ebaadc419f449410cf1aec44fa92ec57  docker/pkg-msys/msys2-base-x86_64-20250830.tar.zst
+19eb403b49ebb8007177a5f8cc49713c69a517d81c30fb31673336e5dd298cc3  docker/pkg-msys/win10.qcow2
+08587a3503226a49b8739afba6a79783190995c042d6f0c330a988bd44ec0d49  vms/alpine/alpine.qcow2
+96d1b44ea1b8a5a884f193526d92edb4676054e9fa903ad2f016441a0fe13089  vms/alpine/alpine-standard-3.22.1-x86_64.iso
