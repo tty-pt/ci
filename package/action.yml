@@ -545,24 +545,35 @@ runs:
           if (-not (Test-Path $dest)) {
             [System.IO.File]::WriteAllBytes($dest, $placeholderPng)
           }
+          Write-Host "Asset: $dest ($(if (Test-Path $dest) { 'ok' } else { 'MISSING' }))"
         }
 
         # 3. AppxManifest.xml from template
+        Write-Host "Fetching template: $templateName"
         $manifestTpl = Invoke-RestMethod `
           "https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/config/$templateName"
+        Write-Host "Template first line: $($manifestTpl -split "`n" | Select-Object -First 1)"
         $appxManifest = $manifestTpl `
           -replace 'APP_NAME',    $name `
           -replace 'APP_VERSION', $version
         [System.IO.File]::WriteAllText("$stageDir\AppxManifest.xml", $appxManifest)
+        Write-Host "AppxManifest.xml written to $stageDir\AppxManifest.xml"
+
+        Write-Host "Stage directory contents:"
+        Get-ChildItem $stageDir -Recurse | Select-Object FullName
 
         # 4. MakeAppx pack
         $sdkBin = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
                      -Filter "MakeAppx.exe" -Recurse |
                    Sort-Object FullName | Select-Object -Last 1).FullName
         if (-not $sdkBin) { throw "MakeAppx.exe not found in Windows SDK" }
+        Write-Host "MakeAppx path: $sdkBin"
         New-Item -ItemType Directory -Force -Path $iden | Out-Null
         $msixPath = "$iden\$ofile.msix"
-        & $sdkBin pack /d $stageDir /p $msixPath /nv
+        Write-Host "Running: $sdkBin pack /d $stageDir /p $msixPath /nv"
+        $makeAppxOut = & $sdkBin pack /d $stageDir /p $msixPath /nv 2>&1
+        Write-Host "MakeAppx exit code: $LASTEXITCODE"
+        Write-Host "MakeAppx output: $makeAppxOut"
         if ($LASTEXITCODE -ne 0) { throw "MakeAppx pack failed" }
         Write-Host "Created $msixPath"
 
