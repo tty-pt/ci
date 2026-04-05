@@ -135,7 +135,7 @@ jobs:
 
     steps:
       - name: Package for ${{ matrix.format }} (${{ matrix.arch || 'default' }})
-        if: contains(inputs.publish_to, matrix.format)
+        if: contains(format(',{0},', inputs.publish_to), format(',{0},', matrix.format))
         uses: tty-pt/ci/package@main
         with:
           name: ${{ inputs.name }}
@@ -200,7 +200,7 @@ jobs:
 
     steps:
       - name: Publish ${{ matrix.format }}
-        if: contains(inputs.publish_to, matrix.format)
+        if: contains(format(',{0},', inputs.publish_to), format(',{0},', matrix.format))
         uses: tty-pt/ci/publish@main
         with:
           name: ${{ inputs.name }}
