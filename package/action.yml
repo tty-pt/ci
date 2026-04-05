@@ -327,6 +327,7 @@ runs:
           make
           mingw-w64-x86_64-gcc
           git
+          unzip
 
     - name: Install prerequisites (WINGET)
       if: inputs.format == 'winget'
