@@ -556,6 +556,12 @@ runs:
         $ofile   = "${{ env.ofile }}"
         $stageDir = "stage"
 
+        # Compute MSIX-safe version: Identity/@Version Major must be >= 1
+        $vparts = $version -split '\.'
+        while ($vparts.Count -lt 3) { $vparts += '0' }
+        if ([int]$vparts[0] -eq 0) { $vparts[0] = '1' }
+        $msixVersion = "$($vparts[0]).$($vparts[1]).$($vparts[2])"
+
         # 1. Detect whether this is an app (has .exe) or a library-only package
         $exeFiles = Get-ChildItem $stageDir -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
         $hasExe   = ($exeFiles | Measure-Object).Count -gt 0
@@ -584,7 +590,7 @@ runs:
         Write-Host "Template first line: $($manifestTpl -split "`n" | Select-Object -First 1)"
         $appxManifest = $manifestTpl `
           -replace 'APP_NAME',    $name `
-          -replace 'APP_VERSION', $version
+          -replace 'APP_VERSION', $msixVersion
         [System.IO.File]::WriteAllText("$stageDir\AppxManifest.xml", $appxManifest)
         Write-Host "AppxManifest.xml written to $stageDir\AppxManifest.xml"
 
