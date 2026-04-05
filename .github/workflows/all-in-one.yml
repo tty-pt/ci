@@ -53,6 +53,11 @@ on:
         required: false
         default: ''
         type: string
+      deps_winget_tty:
+        description: 'tty.pt-hosted winget deps (space-separated bare names)'
+        required: false
+        default: ''
+        type: string
       deps_aur:
         description: 'Arch AUR dependency names'
         required: false
@@ -148,6 +153,7 @@ jobs:
           deps_brew: ${{ inputs.deps_brew || '' }}
           deps_openbsd: ${{ inputs.deps_openbsd || '' }}
           deps_winget: ${{ inputs.deps_winget || '' }}
+          deps_winget_tty: ${{ inputs.deps_winget_tty || '' }}
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
           gpg_keyid: ${{ secrets.GPG_KEYID }}

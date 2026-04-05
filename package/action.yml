@@ -65,6 +65,10 @@ inputs:
     description: 'Windows/MSYS2 dependency names (space-separated mingw-w64-x86_64- packages)'
     required: false
     default: ''
+  deps_winget_tty:
+    description: 'tty.pt-hosted winget deps to fetch+install from tty.pt/winget (space-separated bare names e.g. "libqsys")'
+    required: false
+    default: ''
   abuild_key:
     description: 'ABUILD key'
     required: false
@@ -333,6 +337,32 @@ runs:
         if [ -n "$deps" ]; then
           pacman -S --noconfirm --needed $(echo "$deps" | tr ',' ' ')
         fi
+
+    - name: Install tty.pt deps (WINGET)
+      if: inputs.format == 'winget' && inputs.deps_winget_tty != ''
+      shell: msys2 {0}
+      run: |
+        set -e
+        index=$(curl -fsSL "https://${{ inputs.host }}/winget/index.json")
+        for pkg in $(echo "${{ inputs.deps_winget_tty }}" | tr ',' ' '); do
+          publisher="${{ github.repository_owner }}"
+          pkgId="$publisher.$pkg"
+          url=$(echo "$index" | python3 -c "
+        import sys, json
+        data = json.load(sys.stdin)
+        pkgs = [p for p in data['packages'] if p['id'] == '$pkgId']
+        if not pkgs:
+            raise SystemExit('Package $pkgId not found in tty.pt/winget/index.json')
+        print(sorted(pkgs, key=lambda p: p['version'])[-1]['url'])
+        ")
+          echo "Installing $pkgId from $url"
+          curl -fsSL "$url" -o /tmp/${pkg}.msix
+          mkdir -p /tmp/${pkg}-msix
+          unzip -o /tmp/${pkg}.msix -d /tmp/${pkg}-msix
+          cp -r /tmp/${pkg}-msix/mingw64/* /mingw64/
+          rm -rf /tmp/${pkg}.msix /tmp/${pkg}-msix
+          echo "Installed $pkgId"
+        done
 
 
     - name: Fetch include.mk from tty-pt/mk
