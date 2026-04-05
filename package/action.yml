@@ -347,14 +347,12 @@ runs:
         for pkg in $(echo "${{ inputs.deps_winget_tty }}" | tr ',' ' '); do
           publisher="${{ github.repository_owner }}"
           pkgId="$publisher.$pkg"
-          url=$(echo "$index" | python3 -c "
-        import sys, json
-        data = json.load(sys.stdin)
-        pkgs = [p for p in data['packages'] if p['id'] == '$pkgId']
-        if not pkgs:
-            raise SystemExit('Package $pkgId not found in tty.pt/winget/index.json')
-        print(sorted(pkgs, key=lambda p: p['version'])[-1]['url'])
-        ")
+          url=$(echo "$index" | grep -o '"id":"'"$pkgId"'","version":"[^"]*","type":"[^"]*","url":"[^"]*"' \
+            | tail -1 | grep -o '"url":"[^"]*"' | cut -d'"' -f4)
+          if [ -z "$url" ]; then
+            echo "Package $pkgId not found in tty.pt/winget/index.json" >&2
+            exit 1
+          fi
           echo "Installing $pkgId from $url"
           curl -fsSL "$url" -o /tmp/${pkg}.msix
           mkdir -p /tmp/${pkg}-msix
