@@ -144,7 +144,7 @@ runs:
         "
 
     - name: Prepare repo folder
-      if: inputs.format != 'openbsd'
+      if: inputs.format != 'openbsd' && inputs.format != 'winget'
       shell: sh
       run: |
         mkdir -p repo
@@ -459,7 +459,7 @@ runs:
       shell: bash
 
     - name: Update repo
-      if: inputs.format != 'openbsd'
+      if: inputs.format != 'openbsd' && inputs.format != 'winget'
       shell: sh
       run: |
         echo "Syncing repository..."
@@ -497,6 +497,63 @@ runs:
 
           echo "✅ OpenBSD package index created at $TARGET/index.txt"
         EOF
+
+    - name: Publish winget repo
+      if: inputs.format == 'winget'
+      shell: sh
+      run: |
+        publisher="${{ github.repository_owner }}"
+        name="${{ inputs.name }}"
+        version="${{ env.VERSION }}"
+        pkgId="$publisher.$name"
+        letter="$(echo "$publisher" | cut -c1 | tr '[:upper:]' '[:lower:]')"
+
+        # Paths on the remote server
+        remote_root="/var/www/htdocs/${{ env.REPO }}"
+        remote_manifests="$remote_root/manifests/$letter/$publisher/$name/$version"
+        remote_pkg="$remote_root/${{ env.arch }}"
+
+        # Create remote directories
+        ssh -F $HOME/.ssh/config ${{ inputs.host }} \
+          "mkdir -p $remote_manifests $remote_pkg"
+
+        # Upload the .msix package
+        scp -F $HOME/.ssh/config \
+          dist/${{ env.iden }}/${{ env.ofile }}.msix \
+          ${{ inputs.host }}:$remote_pkg/
+
+        # Upload the winget YAML manifests
+        scp -F $HOME/.ssh/config \
+          dist/${{ env.iden }}/manifests/$pkgId.yaml \
+          dist/${{ env.iden }}/manifests/$pkgId.installer.yaml \
+          dist/${{ env.iden }}/manifests/$pkgId.locale.en-US.yaml \
+          ${{ inputs.host }}:$remote_manifests/
+
+        # Regenerate the flat package index JSON on the server
+        ssh -F $HOME/.ssh/config ${{ inputs.host }} sh <<'ENDSSH'
+        set -e
+        root="/var/www/htdocs/${{ env.REPO }}"
+        index="$root/index.json"
+        tmp="$(mktemp)"
+
+        printf '{"packages":[\n' > "$tmp"
+        first=1
+        find "$root/manifests" -name "*.installer.yaml" | sort | while IFS= read -r f; do
+          pkgid="$(grep '^PackageIdentifier:' "$f" | awk '{print $2}')"
+          pkgver="$(grep '^PackageVersion:' "$f"    | awk '{print $2}')"
+          itype="$(grep '^InstallerType:' "$f"       | awk '{print $2}')"
+          url="$(grep 'InstallerUrl:' "$f"            | awk '{print $2}')"
+          sha="$(grep 'InstallerSha256:' "$f"         | awk '{print $2}')"
+          [ "$first" = "1" ] || printf ',\n' >> "$tmp"
+          first=0
+          printf '{"id":"%s","version":"%s","type":"%s","url":"%s","sha256":"%s"}' \
+            "$pkgid" "$pkgver" "$itype" "$url" "$sha" >> "$tmp"
+        done
+        printf '\n]}\n' >> "$tmp"
+        mv "$tmp" "$index"
+        chmod 644 "$index"
+        echo "winget index updated: $index"
+        ENDSSH
 
     - name: Release lock
       if: always()

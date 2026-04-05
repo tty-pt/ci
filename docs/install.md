@@ -87,6 +87,29 @@ brew tap tty-pt/tap https://github.com/tty-pt/tap.git
 brew install <package>
 ```
 
+## Windows
+
+### winget
+
+Add the tty.pt source once (requires the REST source to be running on `tty.pt`):
+```powershell
+winget source add --name ttypt --arg https://tty.pt/winget --type Microsoft.Rest
+winget install tty-pt.<package>
+```
+
+Or install directly from a release manifest without adding the source:
+```powershell
+winget install --manifest https://tty.pt/winget/manifests/t/tty-pt/<package>/<version>/
+```
+
+### Direct download
+
+Download the `.msix` package from the [GitHub Releases](https://github.com/tty-pt) page and
+double-click to install, or via PowerShell:
+```powershell
+Add-AppxPackage <package>-<version>-winget-x64.msix
+```
+
 ## OpenBSD
 ```sh
 SUFFIX=$(uname -r)/packages/$(uname -m)

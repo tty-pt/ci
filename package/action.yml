@@ -61,6 +61,10 @@ inputs:
     description: 'Arch AUR mingw dependency names'
     required: false
     default: ''
+  deps_winget:
+    description: 'Windows/MSYS2 dependency names (space-separated mingw-w64-x86_64- packages)'
+    required: false
+    default: ''
   abuild_key:
     description: 'ABUILD key'
     required: false
@@ -140,7 +144,7 @@ runs:
         echo "VERSION=$VERSION" >> $GITHUB_ENV
 
         # Set PREFIX based on format
-        if [ "${{ inputs.format }}" = "pacman_mingw" ]; then
+        if [ "${{ inputs.format }}" = "pacman_mingw" ] || [ "${{ inputs.format }}" = "winget" ]; then
           echo "PREFIX=/mingw64" >> $GITHUB_ENV
         else
           echo "PREFIX=/usr" >> $GITHUB_ENV
@@ -309,6 +313,27 @@ runs:
         fi
       shell: sh
 
+    - name: Set up MSYS2 (WINGET)
+      if: inputs.format == 'winget'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          make
+          mingw-w64-x86_64-gcc
+          git
+
+    - name: Install prerequisites (WINGET)
+      if: inputs.format == 'winget'
+      shell: msys2 {0}
+      run: |
+        deps="${{ inputs.deps_winget || inputs.deps }}"
+        echo "deps=$deps" >> $GITHUB_ENV
+        if [ -n "$deps" ]; then
+          pacman -S --noconfirm --needed $(echo "$deps" | tr ',' ' ')
+        fi
+
 
     - name: Fetch include.mk from tty-pt/mk
       run: |
@@ -438,7 +463,7 @@ runs:
       shell: sh
 
     - name: Build and stage project
-      if: inputs.format != 'brew' && inputs.format != 'openbsd'
+      if: inputs.format != 'brew' && inputs.format != 'openbsd' && inputs.format != 'winget'
       run: |
         export PATH="/usr/bin:/bin:$PATH"
         test "${{ inputs.format }}" != "pacman_mingw" || export cross=Msys
@@ -480,8 +505,123 @@ runs:
         ls -lh "$TAR" "$PKG"
       shell: sh
 
+    - name: Build and stage project (WINGET)
+      if: inputs.format == 'winget'
+      shell: msys2 {0}
+      run: |
+        export PATH="/mingw64/bin:/usr/bin:/bin:$PATH"
+        make DESTDIR=$PWD/stage PREFIX=/mingw64
+        make docs || true
+        make DESTDIR=$PWD/stage PREFIX=/mingw64 install
+
+    - name: Create .msix and winget manifests (WINGET)
+      if: inputs.format == 'winget'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $name    = "${{ inputs.name }}"
+        $version = "${{ env.VERSION }}"
+        $arch    = "x64"
+        $iden    = "${{ env.iden }}"
+        $ofile   = "${{ env.ofile }}"
+        $stageDir = "stage"
+
+        # 1. Detect whether this is an app (has .exe) or a library-only package
+        $exeFiles = Get-ChildItem $stageDir -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
+        $hasExe   = ($exeFiles | Measure-Object).Count -gt 0
+        $templateName = if ($hasExe) { "AppxManifest.xml.template" } else { "AppxManifest-lib.xml.template" }
+        Write-Host "Package type: $(if ($hasExe) { 'app' } else { 'library' }) -> $templateName"
+
+        # 2. Generate placeholder logo assets required by AppxManifest <Logo>
+        #    (a 1x1 transparent PNG encoded inline; MakeAppx requires the file to exist)
+        $placeholderPng = [Convert]::FromBase64String(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
+        )
+        $assetsDir = "$stageDir\assets"
+        New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
+        foreach ($asset in @("StoreLogo.png","Square150x150Logo.png","Square44x44Logo.png","Square44x44Logo.altform-unplated_targetsize-256.png")) {
+          $dest = "$assetsDir\$asset"
+          if (-not (Test-Path $dest)) {
+            [System.IO.File]::WriteAllBytes($dest, $placeholderPng)
+          }
+        }
+
+        # 3. AppxManifest.xml from template
+        $manifestTpl = Invoke-RestMethod `
+          "https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/config/$templateName"
+        $appxManifest = $manifestTpl `
+          -replace 'APP_NAME',    $name `
+          -replace 'APP_VERSION', $version
+        [System.IO.File]::WriteAllText("$stageDir\AppxManifest.xml", $appxManifest)
+
+        # 4. MakeAppx pack
+        $sdkBin = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
+                     -Filter "MakeAppx.exe" -Recurse |
+                   Sort-Object FullName | Select-Object -Last 1).FullName
+        if (-not $sdkBin) { throw "MakeAppx.exe not found in Windows SDK" }
+        New-Item -ItemType Directory -Force -Path $iden | Out-Null
+        $msixPath = "$iden\$ofile.msix"
+        & $sdkBin pack /d $stageDir /p $msixPath /nv
+        if ($LASTEXITCODE -ne 0) { throw "MakeAppx pack failed" }
+        Write-Host "Created $msixPath"
+
+        # 5. SHA256 of .msix
+        $hash = (Get-FileHash $msixPath -Algorithm SHA256).Hash.ToLower()
+        Write-Host "SHA256: $hash"
+
+        # 6. Release asset URL
+        $repo         = "${{ github.repository }}"
+        $tag          = "v$version"
+        $installerUrl = "https://github.com/$repo/releases/download/$tag/$ofile.msix"
+
+        # 7. Generate winget YAML manifests using WriteAllLines to avoid
+        #    the heredoc YAML-within-YAML problem
+        $publisher   = "${{ github.repository_owner }}"
+        $pkgId       = "$publisher.$name"
+        $manifestDir = "$iden\manifests"
+        New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
+
+        [System.IO.File]::WriteAllLines("$manifestDir\$pkgId.yaml", @(
+          "PackageIdentifier: $pkgId",
+          "PackageVersion: $version",
+          "DefaultLocale: en-US",
+          "ManifestType: version",
+          "ManifestVersion: 1.6.0"
+        ))
+
+        [System.IO.File]::WriteAllLines("$manifestDir\$pkgId.installer.yaml", @(
+          "PackageIdentifier: $pkgId",
+          "PackageVersion: $version",
+          "Platform:",
+          "  - Windows.Desktop",
+          "MinimumOSVersion: 10.0.17763.0",
+          "InstallerType: msix",
+          "Installers:",
+          "  - Architecture: $arch",
+          "    InstallerUrl: $installerUrl",
+          "    InstallerSha256: $hash",
+          "ManifestType: installer",
+          "ManifestVersion: 1.6.0"
+        ))
+
+        [System.IO.File]::WriteAllLines("$manifestDir\$pkgId.locale.en-US.yaml", @(
+          "PackageIdentifier: $pkgId",
+          "PackageVersion: $version",
+          "PackageLocale: en-US",
+          "Publisher: $publisher",
+          "PackageName: $name",
+          "License: MIT",
+          "ShortDescription: $name binary package",
+          "PackageUrl: https://github.com/$repo",
+          "ManifestType: defaultLocale",
+          "ManifestVersion: 1.6.0"
+        ))
+
+        Write-Host "winget manifests written to $manifestDir"
+        Get-ChildItem $iden -Recurse | Select-Object FullName
+
     - name: Loopback GPG entry
-      if: inputs.gpg_key != ''
+      if: inputs.gpg_key != '' && inputs.format != 'winget'
       run: |
           export GPG_TTY=$(tty || true)
           mkdir -p ~/.gnupg

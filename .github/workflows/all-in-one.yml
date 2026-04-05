@@ -48,6 +48,11 @@ on:
         required: false
         default: ''
         type: string
+      deps_winget:
+        description: 'Windows/MSYS2 dependency names'
+        required: false
+        default: ''
+        type: string
       deps_aur:
         description: 'Arch AUR dependency names'
         required: false
@@ -61,7 +66,7 @@ on:
       publish_to:
         description: "Package managers to publish to"
         required: false
-        default: "deb,apk,pacman,rpm,brew,openbsd,pacman_mingw"
+        default: "deb,apk,pacman,rpm,brew,openbsd,pacman_mingw,winget"
         type: string
       repo_name:
         description: "Repository name for pacman and RPM"
@@ -120,6 +125,8 @@ jobs:
           - format: brew
             arch: x86_64
             runner: macos-15-intel
+          - format: winget
+            runner: windows-latest
 
     steps:
       - name: Package for ${{ matrix.format }} (${{ matrix.arch || 'default' }})
@@ -140,6 +147,7 @@ jobs:
           deps_aur_mingw: ${{ inputs.deps_aur_mingw || '' }}
           deps_brew: ${{ inputs.deps_brew || '' }}
           deps_openbsd: ${{ inputs.deps_openbsd || '' }}
+          deps_winget: ${{ inputs.deps_winget || '' }}
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
           gpg_keyid: ${{ secrets.GPG_KEYID }}
@@ -181,6 +189,8 @@ jobs:
           - format: brew
             arch: x86_64
             runner: macos-15-intel
+          - format: winget
+            runner: ubuntu-latest
 
     steps:
       - name: Publish ${{ matrix.format }}
