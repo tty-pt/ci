@@ -569,7 +569,7 @@ runs:
         )
         $assetsDir = "$stageDir\assets"
         New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
-        foreach ($asset in @("StoreLogo.png","Square150x150Logo.png","Square44x44Logo.png","Square44x44Logo.altform-unplated_targetsize-256.png")) {
+        foreach ($asset in @("StoreLogo.png","Square150x150Logo.png","Square44x44Logo.png")) {
           $dest = "$assetsDir\$asset"
           if (-not (Test-Path $dest)) {
             [System.IO.File]::WriteAllBytes($dest, $placeholderPng)
