@@ -630,27 +630,33 @@ runs:
       run: |
         set -e
 
-        pacman -Sy --noconfirm wine xorg-server-xvfb
+        echo "=== 1: pacman install ==="
+        pacman -Sy --noconfirm wine xorg-server-xvfb || true
+        echo "=== 2: env setup ==="
         export WINEARCH=win64
         export WINEPREFIX="$PWD/wineprefix"
         rm -rf "$WINEPREFIX"
         mkdir -p "$WINEPREFIX"
-        wineboot --init
         export WINEDEBUG=-all
         export WINEDLLOVERRIDES="mshtml,winemenubuilder.exe=d"
-        export DISPLAY=":0"
         export XDG_RUNTIME_DIR="/tmp/runtime-$USER"
         mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
-
-        wget -q https://files.jrsoftware.org/is/6/innosetup-6.2.2.exe -O is.exe
+        echo "=== 3: wineboot ==="
+        wineboot -u; echo "=== wineboot exit: $? ==="
+        wineserver -k; echo "=== wineserver -k exit: $? ==="
+        echo "=== 4: wget innosetup ==="
+        wget -q https://github.com/jrsoftware/issrc/releases/download/is-6_7_1/innosetup-6.7.1.exe -O is.exe
+        echo "=== 5: wine is.exe ==="
         xvfb-run -a wine is.exe /SP- /VERYSILENT /NORESTART /SUPPRESSMSGBOXES /DIR=C:\\innosetup
-
+        echo "=== 6: fetch installer.iss ==="
         curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/config/installer.iss -o installer.template.iss
         sed "s/APP_NAME/${{ inputs.name }}/g" installer.template.iss > installer.iss
-
+        echo "=== 7: unzip ==="
         unzip -o "${{ env.iden }}/${{ env.ofile }}.zip" -d zip
         which wine
+        echo "=== 8: wine ISCC.exe ==="
         xvfb-run -a wine "C:\\innosetup\\ISCC.exe" installer.iss
+        echo "=== 9: mv setup.exe ==="
         mv Output/${{ inputs.name }}-setup.exe "${{ env.iden }}/${{ env.ofile }}-setup.exe"
         rm -rf \
           zip wineprefix Output is.exe \

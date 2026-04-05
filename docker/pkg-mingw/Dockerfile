@@ -57,7 +57,20 @@ RUN --mount=type=cache,target=/var/lib/pacman/sync \
     make \
     pkgconf \
     binutils \
-    file
+    file \
+    fakeroot \
+    debugedit \
+    which \
+    patch \
+    diffutils \
+    autoconf \
+    automake \
+    m4 \
+    bison \
+    flex \
+    texinfo \
+    xxhash \
+    xz
 
 # ---------- Toolchain MinGW (garante overwrite dos arquivos de runtime) ----------
 RUN --mount=type=cache,target=/var/lib/pacman/sync \
