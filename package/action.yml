@@ -550,8 +550,8 @@ runs:
 
         # 3. AppxManifest.xml from template
         Write-Host "Fetching template: $templateName"
-        $manifestTpl = Invoke-RestMethod `
-          "https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/config/$templateName"
+        $manifestTpl = (Invoke-WebRequest `
+          "https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/config/$templateName").Content
         Write-Host "Template first line: $($manifestTpl -split "`n" | Select-Object -First 1)"
         $appxManifest = $manifestTpl `
           -replace 'APP_NAME',    $name `
