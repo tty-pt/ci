@@ -343,7 +343,7 @@ runs:
       shell: msys2 {0}
       run: |
         set -e
-        index=$(curl -fsSL "https://${{ inputs.host }}/winget/index.json")
+        index=$(curl -fsSL "https://${{ inputs.host }}/winget/index.json" | tr -d '\r')
         for pkg in $(echo "${{ inputs.deps_winget_tty }}" | tr ',' ' '); do
           publisher="${{ github.repository_owner }}"
           pkgId="$publisher.$pkg"
