@@ -333,7 +333,7 @@ runs:
       if: inputs.format == 'winget'
       shell: msys2 {0}
       run: |
-        deps="${{ inputs.deps_winget || inputs.deps }}"
+        deps="${{ inputs.deps_winget }}"
         echo "deps=$deps" >> $GITHUB_ENV
         if [ -n "$deps" ]; then
           pacman -S --noconfirm --needed $(echo "$deps" | tr ',' ' ')
