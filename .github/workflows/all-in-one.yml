@@ -102,7 +102,6 @@ jobs:
   package:
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.image || null }}
-    if: contains(inputs.publish_to, matrix.format)
     strategy:
       fail-fast: false
       matrix:
@@ -136,6 +135,7 @@ jobs:
 
     steps:
       - name: Package for ${{ matrix.format }} (${{ matrix.arch || 'default' }})
+        if: contains(inputs.publish_to, matrix.format)
         uses: tty-pt/ci/package@main
         with:
           name: ${{ inputs.name }}
@@ -167,7 +167,6 @@ jobs:
     needs: package
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.image || null }}
-    if: contains(inputs.publish_to, matrix.format)
     strategy:
       fail-fast: false
       matrix:
@@ -201,6 +200,7 @@ jobs:
 
     steps:
       - name: Publish ${{ matrix.format }}
+        if: contains(inputs.publish_to, matrix.format)
         uses: tty-pt/ci/publish@main
         with:
           name: ${{ inputs.name }}
