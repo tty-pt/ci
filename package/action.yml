@@ -510,6 +510,7 @@ runs:
       shell: msys2 {0}
       run: |
         export PATH="/mingw64/bin:/usr/bin:/bin:$PATH"
+        export cross=MinGW64
         make DESTDIR=$PWD/stage PREFIX=/mingw64
         make docs || true
         make DESTDIR=$PWD/stage PREFIX=/mingw64 install
