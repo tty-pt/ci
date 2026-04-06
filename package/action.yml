@@ -156,8 +156,14 @@ runs:
 
         arch="$(uname -m)"
         echo "arch=$arch" >> $GITHUB_ENV
-        echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
-        echo "ofile=${{ inputs.name }}-$VERSION-${{ inputs.format }}-$arch" >> $GITHUB_ENV
+
+        if [ "${{ inputs.format }}" = "winget" ]; then
+          echo "iden=out" >> $GITHUB_ENV
+          echo "ofile=${{ inputs.name }}-$VERSION-$arch" >> $GITHUB_ENV
+        else
+          echo "iden=${{ inputs.name }}-${{ inputs.format }}-$arch" >> $GITHUB_ENV
+          echo "ofile=${{ inputs.name }}-$VERSION-${{ inputs.format }}-$arch" >> $GITHUB_ENV
+        fi
 
         if test -z "${{ inputs.repo }}"; then
           REPO=${{ inputs.format }}
@@ -540,9 +546,9 @@ runs:
       run: |
         export PATH="/mingw64/bin:/usr/bin:/bin:$PATH"
         export cross=MinGW64
-        make DESTDIR=$PWD/stage PREFIX=/mingw64
+        make DESTDIR=$env:TEMP/stage PREFIX=/mingw64
         make docs || true
-        make DESTDIR=$PWD/stage PREFIX=/mingw64 install
+        make DESTDIR=$env:TEMP/stage PREFIX=/mingw64 install
 
     - name: Create .msix and winget manifests (WINGET)
       if: inputs.format == 'winget'
@@ -554,7 +560,7 @@ runs:
         $arch    = "x64"
         $iden    = "${{ env.iden }}"
         $ofile   = "${{ env.ofile }}"
-        $stageDir = "stage"
+        $stageDir = "$env:TEMP\stage"
 
         # 1. Detect whether this is an app (has .exe) or a library-only package
         $exeFiles = Get-ChildItem $stageDir -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
