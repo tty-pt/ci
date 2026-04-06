@@ -30,7 +30,7 @@
 
   <Applications>
     <Application
-      Id="APP_NAME"
+      Id="APP_ID"
       Executable="mingw64\bin\APP_NAME.exe"
       EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements

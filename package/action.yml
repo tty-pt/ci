@@ -584,6 +584,7 @@ runs:
         Write-Host "Template first line: $($manifestTpl -split "`n" | Select-Object -First 1)"
         $appxManifest = $manifestTpl `
           -replace 'APP_NAME',    $name `
+          -replace 'APP_ID',      ($name -replace '-', '') `
           -replace 'APP_VERSION', $version
         [System.IO.File]::WriteAllText("$stageDir\AppxManifest.xml", $appxManifest)
         Write-Host "AppxManifest.xml written to $stageDir\AppxManifest.xml"
