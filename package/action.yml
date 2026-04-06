@@ -679,31 +679,46 @@ runs:
 
         mkdir -p zip
 
-        curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/scripts/rldd.sh -o rldd.sh
-        chmod +x rldd.sh
-
         export PATH="/mingw64/bin:/usr/bin:/bin:$PATH"
-        export RLDD="ldd"
-        export RLDD_PATH="$PWD/stage/mingw64/bin:/mingw64/bin"
-        export RLDD_SO="dll"
+
+        # Collect DLLs recursively using objdump (safe on PE32, no hanging)
+        collect_deps() {
+          local target="$1"
+          local dll found
+          while IFS= read -r dll; do
+            [ -z "$dll" ] && continue
+            # Already collected - skip (dedup + loop-break)
+            [ -f "zip/$dll" ] && continue
+            found=""
+            for dir in "$PWD/stage/mingw64/bin" "/mingw64/bin"; do
+              if [ -f "$dir/$dll" ]; then
+                found="$dir/$dll"
+                break
+              fi
+            done
+            if [ -z "$found" ]; then
+              echo "NOT FOUND: $dll" >&2
+              continue
+            fi
+            echo "  + $dll"
+            cp "$found" zip/
+            collect_deps "$found"
+          done < <(objdump -p "$target" 2>/dev/null | grep "DLL Name" | awk '{print $3}')
+        }
 
         has_exe=""
         for exe in "$bin_dir"/*; do
-          file "$exe" | grep -q "PE32" || continue
+          objdump -p "$exe" 2>/dev/null | grep -q "PE32" || continue
           echo "→ Collecting deps for $(basename "$exe")"
           case "$exe" in *.exe) has_exe=1 ;; esac
           cp -n "$exe" zip/
-          ./rldd.sh "$exe" | while read -r dll arrow path more; do
-            [ -z "$dll" ] && continue
-            [ -f "$path" ] || { echo "RLDD NOT FOUND: $dll" >&2; continue; }
-            cp -n "$path" zip/ 2>/dev/null || true
-          done
+          collect_deps "$exe"
         done
 
         if [ -z "$has_exe" ]; then
           echo "→ No executables. Skipping setup.exe"
           echo "skip_installer=true" >> $GITHUB_ENV
-          rm -rf zip rldd.sh
+          rm -rf zip
           exit 0
         fi
 
@@ -712,7 +727,6 @@ runs:
 
         echo "zip/ contents:"
         find zip -type f
-        rm -f rldd.sh
 
     - name: Build setup.exe (WINGET)
       if: inputs.format == 'winget' && env.skip_installer != 'true'
