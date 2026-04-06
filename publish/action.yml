@@ -522,6 +522,12 @@ runs:
           dist/${{ env.iden }}/${{ env.ofile }}.msix \
           ${{ inputs.host }}:$remote_pkg/
 
+        # Upload the setup.exe (if present)
+        setupexe="dist/${{ env.iden }}/${{ env.ofile }}-setup.exe"
+        if [ -f "$setupexe" ]; then
+          scp -F $HOME/.ssh/config "$setupexe" ${{ inputs.host }}:$remote_pkg/
+        fi
+
         # Upload the winget YAML manifests
         scp -F $HOME/.ssh/config \
           dist/${{ env.iden }}/manifests/$pkgId.yaml \
