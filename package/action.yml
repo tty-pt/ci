@@ -600,10 +600,12 @@ runs:
         New-Item -ItemType Directory -Force -Path $iden | Out-Null
         $msixPath = "$iden\$ofile.msix"
         Write-Host "Running: $sdkBin pack /d $stageDir /p $msixPath /nv"
-        $makeAppxOut = & $sdkBin pack /d $stageDir /p $msixPath /nv 2>&1
-        Write-Host "MakeAppx exit code: $LASTEXITCODE"
-        Write-Host "MakeAppx output: $makeAppxOut"
-        if ($LASTEXITCODE -ne 0) { throw "MakeAppx pack failed" }
+        & $sdkBin pack /d $stageDir /p $msixPath /nv > makeappx.log 2>&1
+        $makeAppxExitCode = $LASTEXITCODE
+        Write-Host "MakeAppx exit code: $makeAppxExitCode"
+        Write-Host "MakeAppx output:"
+        Get-Content makeappx.log | ForEach-Object { Write-Host $_ }
+        if ($makeAppxExitCode -ne 0) { throw "MakeAppx pack failed" }
         Write-Host "Created $msixPath"
 
         # 5. SHA256 of .msix
