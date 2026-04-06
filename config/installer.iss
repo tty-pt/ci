@@ -1,6 +1,6 @@
 [Setup]
 AppName=APP_NAME
-AppVersion=1.0
+AppVersion=APP_VERSION
 DefaultDirName={autopf}\APP_NAME
 DefaultGroupName=APP_NAME
 OutputDir=Output

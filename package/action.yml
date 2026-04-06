@@ -664,6 +664,80 @@ runs:
         Write-Host "winget manifests written to $manifestDir"
         Get-ChildItem $iden -Recurse | Select-Object FullName
 
+    - name: Build setup.exe (WINGET)
+      if: inputs.format == 'winget'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $name    = "${{ inputs.name }}"
+        $version = "${{ env.VERSION }}"
+        $iden    = "${{ env.iden }}"
+        $ofile   = "${{ env.ofile }}"
+        $stageDir = "stage"
+
+        # Skip if no .exe in stage
+        $exeFiles = Get-ChildItem $stageDir -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue
+        if (($exeFiles | Measure-Object).Count -eq 0) {
+          Write-Host "No .exe found - skipping setup.exe creation"
+          exit 0
+        }
+
+        # 1. Collect exe + DLLs + share files into zip\
+        New-Item -ItemType Directory -Force -Path "zip" | Out-Null
+        $exePath = "$stageDir\mingw64\bin\$name.exe"
+        Copy-Item $exePath "zip\"
+
+        # Collect DLLs via ldd in MSYS2
+        $lddOut = & "C:\msys64\usr\bin\bash.exe" -lc `
+          "export PATH=/mingw64/bin:/usr/bin:/bin:`$PATH; ldd stage/mingw64/bin/$name.exe 2>/dev/null" 2>&1
+        foreach ($line in $lddOut) {
+          if ($line -match "=> (/mingw64/bin/\S+\.dll)") {
+            $dll = $matches[1] -replace "/", "\"
+            $src = "C:\msys64$dll"
+            if (Test-Path $src) {
+              Copy-Item $src "zip\" -ErrorAction SilentlyContinue
+            }
+          }
+        }
+
+        # Copy share files (resources, map, etc.)
+        $shareDir = "$stageDir\mingw64\share\$name"
+        if (Test-Path $shareDir) {
+          Copy-Item "$shareDir\*" "zip\" -Recurse -Force
+        }
+
+        Write-Host "zip\ contents:"
+        Get-ChildItem "zip" -Recurse | Select-Object FullName
+
+        # 2. Install Inno Setup
+        Write-Host "Installing Inno Setup..."
+        choco install innosetup --no-progress -y | Out-Null
+        $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
+        if (-not (Test-Path $iscc)) { throw "ISCC.exe not found" }
+
+        # 3. Fetch and fill installer.iss template
+        $tpl = (Invoke-WebRequest `
+          "https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/config/installer.iss").Content
+        $iss = $tpl `
+          -replace 'APP_NAME',    $name `
+          -replace 'APP_VERSION', $version
+        [System.IO.File]::WriteAllText("installer.iss", $iss)
+
+        # 4. Run ISCC
+        Write-Host "Running ISCC..."
+        & $iscc "installer.iss"
+        if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+        # 5. Move output
+        $setupSrc = "Output\$name-setup.exe"
+        $setupDst = "$iden\$ofile-setup.exe"
+        Move-Item $setupSrc $setupDst
+        Write-Host "Created $setupDst"
+
+        # Cleanup
+        Remove-Item -Recurse -Force zip, installer.iss, Output -ErrorAction SilentlyContinue
+
     - name: Loopback GPG entry
       if: inputs.gpg_key != '' && inputs.format != 'winget'
       run: |
