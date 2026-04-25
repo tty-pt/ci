@@ -11,6 +11,18 @@ inputs:
     description: 'Debian dependency list'
     required: false
     default: ''
+  setup:
+    description: 'Optional shell setup command to run before build/test'
+    required: false
+    default: ''
+  build:
+    description: 'Build command'
+    required: false
+    default: 'make'
+  command:
+    description: 'Test command'
+    required: false
+    default: 'make test'
 
 runs:
   using: 'composite'
@@ -37,9 +49,14 @@ runs:
       shell: sh
       run: git clone --branch main https://github.com/tty-pt/mk ../mk
 
+    - name: Test setup
+      if: inputs.setup != ''
+      shell: sh
+      run: ${{ inputs.setup }}
+
     - name: Build and test
       shell: sh
       run: |
-        make
+        ${{ inputs.build }}
         export LD_LIBRARY_PATH=$PWD/lib:${LD_LIBRARY_PATH}
-        make test
+        ${{ inputs.command }}

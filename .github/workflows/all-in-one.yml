@@ -73,6 +73,36 @@ on:
         required: false
         default: "deb,apk,pacman,rpm,brew,openbsd,pacman_mingw,winget"
         type: string
+      run_tests:
+        description: "Run shared test phase before packaging"
+        required: false
+        default: false
+        type: boolean
+      test_setup:
+        description: "Optional shell setup command before tests"
+        required: false
+        default: ''
+        type: string
+      test_build:
+        description: "Build command for shared test phase"
+        required: false
+        default: 'make'
+        type: string
+      test_command:
+        description: "Test command for shared test phase"
+        required: false
+        default: 'make test'
+        type: string
+      run_package:
+        description: "Run package phase"
+        required: false
+        default: true
+        type: boolean
+      run_publish:
+        description: "Run publish phase"
+        required: false
+        default: true
+        type: boolean
       repo_name:
         description: "Repository name for pacman and RPM"
         required: false
@@ -80,11 +110,11 @@ on:
         type: string
     secrets:
       HOST:
-        required: true
+        required: false
       USER:
-        required: true
+        required: false
       SSH_KEY:
-        required: true
+        required: false
       GPG_PRIVATE_KEY:
         required: false
       GPG_PASSPHRASE:
@@ -99,7 +129,25 @@ on:
         required: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run shared test phase
+        if: inputs.run_tests
+        uses: tty-pt/ci/test@main
+        with:
+          deps: ${{ inputs.deps || '' }}
+          deps_deb: ${{ inputs.deps_deb || '' }}
+          setup: ${{ inputs.test_setup }}
+          build: ${{ inputs.test_build }}
+          command: ${{ inputs.test_command }}
+      - name: Skip shared test phase
+        if: ${{ !inputs.run_tests }}
+        run: echo "Shared test phase disabled"
+
   package:
+    if: inputs.run_package
+    needs: test
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.image || null }}
     strategy:
@@ -164,6 +212,7 @@ jobs:
           ssh_key: ${{ secrets.SSH_KEY || '' }}
 
   publish:
+    if: inputs.run_package && inputs.run_publish
     needs: package
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.image || null }}
@@ -219,9 +268,9 @@ jobs:
           tap_token: ${{ secrets.TAP_TOKEN || '' }}
 
   release:
+    if: inputs.run_package && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     needs: package
-    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Create and publish GitHub Release
         uses: tty-pt/ci/release@main
