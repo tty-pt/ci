@@ -400,7 +400,7 @@ runs:
           shasum -a 256 $f | cut -d' ' -f1 > $f.sha
         done
 
-        CLASS_NAME="$(echo "${{ inputs.name }}" | perl -pe 's/(?:^|_)([a-z])/\u$1/g')"
+        CLASS_NAME="$(echo "${{ inputs.name }}" | perl -pe 's/(?:^|[-_])([a-z])/\u$1/g')"
 
         {
           echo "class ${CLASS_NAME} < Formula"

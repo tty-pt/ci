@@ -212,6 +212,7 @@ runs:
       if: inputs.format == 'brew'
       run: |
         brew tap tty-pt/tap https://github.com/tty-pt/tap.git
+        brew trust tty-pt/tap || true
       shell: sh
 
     - name: Install yay (PACMAN)
