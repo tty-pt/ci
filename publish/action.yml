@@ -448,13 +448,22 @@ runs:
 
         git clone --depth=1 "$TAP_REPO" "$TAP_DIR"
         mkdir -p "$TAP_DIR/Formula"
+
+        echo "🔧 Normalizing formula class names in existing tap..."
+        for f in "$TAP_DIR"/Formula/*.rb; do
+          [ -e "$f" ] || continue
+          n="$(basename "$f" .rb)"
+          k="$(printf '%s' "$n" | perl -pe 's/(?:^|[-_])([a-z])/\u$1/g')"
+          perl -pi -e "s/^class [A-Za-z0-9_-]* < Formula/class $k < Formula/" "$f"
+        done
+
         cp *.rb "$TAP_DIR/Formula/"
 
         cd "$TAP_DIR"
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add Formula/*.rb
-        git commit -m "Update ${{ inputs.name }}} to v${{ env.VERSION}}:-${{ github.ref_name }}" || true
+        git commit -m "Update ${{ inputs.name }} to v${{ env.VERSION }} (${{ github.ref_name }})" || true
         git push origin main || echo "No changes to push."
       shell: bash
 

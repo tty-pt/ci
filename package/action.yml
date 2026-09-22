@@ -213,6 +213,20 @@ runs:
       run: |
         brew tap tty-pt/tap https://github.com/tty-pt/tap.git
         brew trust tty-pt/tap || true
+
+        TAPDIR="$(brew --repository)/Library/Taps/tty-pt/tap/Formula"
+        if [ -d "$TAPDIR" ]; then
+          echo "🔧 Normalizing formula class names in $TAPDIR"
+          for f in "$TAPDIR"/*.rb; do
+            [ -e "$f" ] || continue
+            n="$(basename "$f" .rb)"
+            k="$(printf '%s' "$n" | perl -pe 's/(?:^|[-_])([a-z])/\u$1/g')"
+            perl -pi -e "s/^class [A-Za-z0-9_-]* < Formula/class $k < Formula/" "$f"
+          done
+          ls "$TAPDIR"
+        else
+          echo "⚠️ Tap formula dir not found: $TAPDIR"
+        fi
       shell: sh
 
     - name: Install yay (PACMAN)
@@ -405,10 +419,20 @@ runs:
       if: inputs.format == 'openbsd'
       shell: sh
       run: |
-        cd ..
-        tar czf source.tar.gz ${{ inputs.name }} mk
-        scp -F $HOME/.ssh/config source.tar.gz ${{ inputs.host }}:/var/www/var/ci-chroot/usr/src/${{ inputs.name }}.tar.gz
-        cd - 2>/dev/null
+        set -eu
+        PWS="${{ github.workspace }}"
+        UPLOAD="$PWS/../${{ inputs.name }}-upload"
+        mkdir -p "$UPLOAD"
+        tar czf "$UPLOAD/${{ inputs.name }}.tar.gz" \
+          -C "$PWS/.." \
+          --exclude-vcs \
+          "${{ inputs.name }}" mk
+
+        scp -o ConnectTimeout=10 -F "$HOME/.ssh/config" \
+          "$UPLOAD/${{ inputs.name }}.tar.gz" \
+          "${{ inputs.host }}:/var/www/var/ci-chroot/usr/src/${{ inputs.name }}.tar.gz"
+        echo "✅ Uploaded ${{ inputs.name }}.tar.gz to ci-chroot staging"
+        rm -rf "$UPLOAD"
 
         ssh -F $HOME/.ssh/config ${{ inputs.host }} doas /usr/local/sbin/ci-chroot <<'EOF'
         set -eu
@@ -417,7 +441,11 @@ runs:
         OFF="$(cat /etc/installurl)/$SUFFIX/"
         stage=stage-${{ env.iden }}
 
-        pkg_delete -I -Ddependencies ${{ inputs.name }} || true
+        if pkg_info -e '${{ inputs.name }}-*' >/dev/null 2>&1; then
+          pkg_delete -I -Ddependencies ${{ inputs.name }}
+        else
+          echo "▶ ${{ inputs.name }} not previously installed — skipping uninstall"
+        fi
 
         deps="$(echo ${{ env.deps }} | tr ',' ' ')"
         echo "📦 Installing dependencies '$deps'..."
@@ -431,6 +459,11 @@ runs:
         mkdir -p ${{ inputs.name }} dist-openbsd $stage
 
         echo "📦 Extracting source archive..."
+        if [ ! -f ${{ inputs.name }}.tar.gz ]; then
+          echo "❌ ${{ inputs.name }}.tar.gz not found in /usr/src" >&2
+          ls -la /usr/src >&2
+          exit 1
+        fi
         tar xzf ${{ inputs.name }}.tar.gz
         rm ${{ inputs.name }}.tar.gz
 

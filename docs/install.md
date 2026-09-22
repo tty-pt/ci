@@ -1,7 +1,7 @@
 # Install tty.pt packages
 We distribute our packages for the different package managers and different operating systems. Follow these instructions to easily get them working in your computer.
 
-## Any
+Every repository is signed, and the commands below install and verify the tty.pt signing key before use.
 
 ## Linux
 
@@ -25,11 +25,11 @@ sudo apt install <package-name>
 ### Apk (Alpine, Etc)
 At least once in your life you need to:
 ```sh
-# Add your repository to Alpine's sources
+# Add your repository to Alpine's sources (apk appends the architecture itself)
 echo "https://tty.pt/apk" >> /etc/apk/repositories
 
-# Add your GPG public key for verification
-wget -O /etc/apk/keys/ttypt.rsa.pub https://tty.pt/apk/key.pub
+# Add the GPG public key for verification
+wget -O /etc/apk/keys/ttypt.rsa.pub https://tty.pt/apk/keys/ttypt.rsa.pub
 
 # Update package indexes
 apk update
@@ -40,15 +40,16 @@ Then it's just:
 apk add <package-name>
 ```
 
-### pacman (Arch Linux, Windows/Msys, Etc)
+### pacman (Arch Linux, MSYS2, Etc)
 At least once in your life you need to:
 ```sh
-# Add the repository to pacman.conf
-echo -e "\n[ttypt]\nSigLevel = Optional TrustAll\nServer = https://tty.pt/pacman/\$arch" | sudo tee -a /etc/pacman.conf
+# Import and locally trust the tty.pt signing key
+sudo pacman-key --add <(wget -qO- https://tty.pt/pacman/key-ttypt.pub)
+# The fingerprint is printed by the command above; sign the imported key locally:
+sudo pacman-key --lsign-key <KEY_FINGERPRINT>
 
-# Import the GPG key (optional, for verification)
-sudo pacman-key --add <(wget -qO- https://tty.pt/pacman/key.pub)
-sudo pacman-key --lsign-key YOUR_KEY_ID
+# Add the repository (signatures are required)
+echo -e "\n[ttypt]\nSigLevel = Required DatabaseOptional\nServer = https://tty.pt/pacman/\$arch" | sudo tee -a /etc/pacman.conf
 
 # Update package database
 sudo pacman -Sy
@@ -59,14 +60,15 @@ Then it's just:
 sudo pacman -S ttypt/<package-name>
 ```
 
-### rpm (Fedora, Red Hat, etc)
+### rpm (Fedora, Red Hat, Etc)
 At least once in your life you need to:
 ```sh
-# Download the repository configuration
+# Download the repository configuration (it ships with gpgcheck=1)
 curl -O https://tty.pt/rpm/ttypt.repo
-
-# Install the repository configuration
 sudo mv ttypt.repo /etc/yum.repos.d/
+
+# Import the signing key so signature checks pass
+sudo rpm --import https://tty.pt/rpm/RPM-GPG-KEY-ttypt
 
 # Update package cache
 sudo dnf check-update  # For Fedora/RHEL 8+
@@ -81,9 +83,10 @@ sudo dnf install <package>
 sudo yum install <package>
 ```
 
-## Brew (MacOS)
+## Brew (macOS)
 ```sh
 brew tap tty-pt/tap https://github.com/tty-pt/tap.git
+brew trust tty-pt/tap || true
 brew install <package>
 ```
 
@@ -118,10 +121,11 @@ OFF="$(cat /etc/installurl)/$SUFFIX/"
 doas env PKG_PATH="$MY:$OFF" pkg_add <package>
 ```
 
-### Building from Source:
+## Building from Source:
 ```sh
 git clone https://github.com/tty-pt/mk.git ../mk
 make
 sudo make install
 ```
 You'll need to manually install any dependencies in order to be able to run the project, in this case.
+See each project's README (`## Build from source`) for the full dependency list.
