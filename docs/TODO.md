@@ -1,10 +1,8 @@
 # TODO
 
-## Recover signed manifests for brew
+## Signed brew manifests
 
-**Status: want this back. Partially restored, still incomplete.**
-
-Brew manifests used to be GPG-signed. They no longer are.
+**Status: signing restored and confirmed on a real release.**
 
 ### History
 
@@ -18,31 +16,52 @@ Brew manifests used to be GPG-signed. They no longer are.
   `publish/action.yml` and dropped the `mkdir`. The signing step survived,
   still `cd`ing into `repo/versions/$VERSION` — a directory nothing creates.
   `&&` short-circuited, `|| true` swallowed it, exit code 0. **Every brew
-  release since has published an unsigned manifest and reported success.**
-  Verified by running the old snippet verbatim against a real throwaway key:
-  the `cd` fails, no `.asc` is written, the step still exits 0.
+  release between then and `20d8df2` published an unsigned manifest and
+  reported success.** Confirmed by running the old snippet verbatim against a
+  real throwaway key: the `cd` fails, no `.asc` is written, exit 0.
 
-### Where it stands now
+### Fixed in `20d8df2`
 
-`20d8df2` restores the signing: it creates `repo/versions/$VERSION`, builds
-the manifest from that version's files, and signs it. Verified end to end
-with a throwaway key — `Good signature`.
+Creates `repo/versions/$VERSION`, builds the manifest from that version's
+files only, and signs it. The `|| true` is gone: a signing failure now
+prints a warning instead of passing silently, but still does not fail the
+publish, since an unsigned mirror is still usable.
 
-What is still missing is **delivery**. The brew upload only pushes `repo/`'s
-top level, so the manifest and its signature stay on the runner and never
-reach the host. Restoring the signature properly means:
+### Confirmed working
 
-1. Decide the on-host layout. The obvious one is to keep publishing to
-   `/var/www/htdocs/brew/` flat (filenames are already versioned) *plus* a
-   `versions/<v>/SHA256SUMS` + `SHA256SUMS.asc` + `key.pub` tree, and push
-   that tree rather than letting each release overwrite the flat root
-   `SHA256SUMS`, which now describes only the current build.
-2. Decide who verifies it. As of 2026-10 nothing consumes
-   `/var/www/htdocs/brew/`: all 37 formulae in `tty-pt/tap` fetch the GitHub
-   release asset and carry an inline sha256, and the GitHub release already
-   publishes a signed `CHECKSUMS.asc`. So the brew artifacts *are* signed and
-   verified today — just through the release, not the host mirror. A signed
-   manifest on the host is only worth restoring if something starts reading
-   it, or if the host is meant to be an independent archive.
+nd-level `v1.0.1`, run `36791525891`, publish job `110145828263`:
+`versions/1.0.1/SHA256SUMS.asc` was produced and the subsequent `Update repo`
+transferred 13 files including `versions/1.0.1/SHA256SUMS` and
+`versions/1.0.1/SHA256SUMS.asc`. Signature and manifest are on the host.
 
-Point 2 is the real decision; point 1 is mechanical once it is made.
+### Open
+
+1. **Nothing consumes the signed manifest.** All 37 formulae in `tty-pt/tap`
+   fetch the GitHub release asset and carry an inline sha256; the release
+   also publishes its own signed `CHECKSUMS.asc`. So the signature is
+   published and verifiable by hand, but no client checks it. Worth deciding
+   whether the host mirror is meant to be an independently verifiable archive
+   (in which case document how to verify) or just a file cache (in which case
+   the signing is belt-and-braces and that's fine).
+
+2. **The flat root `SHA256SUMS` is now ambiguous.** For brew, `Prepare repo
+   folder` no longer pulls the mirror down, so the manifest it computes at
+   publish/action.yml:201 covers only the current build, while the host's
+   pre-existing copy covers the full history. rsync's size+mtime check means
+   the host file is *not* being truncated in practice — the new one is
+   written into a different byte range and left alone. But the two files have
+   the same path and different meanings. If the mirror should have one
+   authoritative manifest, generate it on the host:
+
+   ```
+   ssh <host> 'cd /var/www/htdocs/brew && find . -type f \
+     -not -name "SHA256SUMS*" -not -name "key.pub" | sort | xargs sha256sum'
+   ```
+
+   which returns tens of KB of text rather than transferring artifacts, then
+   sign that locally and push it. Not done because nothing reads the file.
+
+3. **The mirror grows without bound.** Every release adds artifacts to
+   `/var/www/htdocs/brew/` and nothing prunes old versions, which is why the
+   download had reached 527 files. Whatever is decided about the manifest, a
+   retention policy for old versions would keep this from recurring.
