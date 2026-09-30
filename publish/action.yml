@@ -531,13 +531,14 @@ runs:
       shell: bash
 
     - name: Update repo
-      if: inputs.format != 'openbsd' && inputs.format != 'winget' && inputs.format != 'brew'
+      if: inputs.format != 'openbsd' && inputs.format != 'winget'
       shell: sh
       run: |
-        # The mirror is read-only history for every format that has one
-        # (pacman via its Server = line, apk/rpm via repodata); brew is
-        # excluded because its formula resolves against the GitHub release
-        # asset, so there is nothing on the host for it to serve.
+        # Still runs for brew: the host keeps a copy of every artifact.
+        # It is cheap now only because Prepare repo folder no longer pulls
+        # the accumulated mirror down, so repo/ holds this build's files and
+        # this transfers ~5 files instead of the mirror's whole history. Do
+        # not re-add brew to the mirror here without doing the same there.
         echo "Syncing repository..."
         rsync -avz -e "ssh -F $HOME/.ssh/config" \
           repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/"
