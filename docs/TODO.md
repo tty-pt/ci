@@ -48,9 +48,9 @@ transferred 13 files including `versions/1.0.1/SHA256SUMS` and
    folder` no longer pulls the mirror down, so the manifest it computes at
    publish/action.yml:201 covers only the current build, while the host's
    pre-existing copy covers the full history. rsync's size+mtime check means
-   the host file is *not* being truncated in practice — the new one is
-   written into a different byte range and left alone. But the two files have
-   the same path and different meanings. If the mirror should have one
+   the host file is *not* being truncated in practice — the new one has a
+   different size and mtime, so it is left alone. But the two files share a
+   path and mean different things. If the mirror should have one
    authoritative manifest, generate it on the host:
 
    ```
@@ -58,10 +58,32 @@ transferred 13 files including `versions/1.0.1/SHA256SUMS` and
      -not -name "SHA256SUMS*" -not -name "key.pub" | sort | xargs sha256sum'
    ```
 
-   which returns tens of KB of text rather than transferring artifacts, then
-   sign that locally and push it. Not done because nothing reads the file.
+   which returns tens of KB of text rather than transferring artifacts.
 
-3. **The mirror grows without bound.** Every release adds artifacts to
+3. **Generate indexes on the host for apk/deb/rpm/pacman, to avoid the
+   download entirely.** Not attempted — the toolchain on the host is unknown
+   and getting it wrong would break signing for all four formats. Notes for
+   whoever picks this up:
+
+   - Those four formats pull the mirror down because they must: `apk index`,
+     `createrepo_c`, `repo-add` and `apt-ftparchive` all read artifact
+     *contents* to compute checksums and metadata. Signing is not what forces
+     the download.
+   - Moving generation to the host inverts the order: upload artifacts →
+     generate index on host → pull the index back (tens of KB) → sign on the
+     runner → push the signature. The host does the work, the runner does the
+     crypto, because the keys are CI secrets and are not on the host.
+   - There is already a per-`REPO` remote lock (`Acquire lock`) held across
+     the whole publish, so an upload-then-index sequence on the host is
+     atomic with respect to other publishes.
+   - Prerequisites to confirm on the host first: `apk`, `apt-ftparchive`,
+     `createrepo_c`, `repo-add`, and a shell that can run them.
+   - Each format already produces a cumulative signed index that clients
+     verify (`InRelease` for deb, `APKINDEX.tar.gz` for apk, `repomd.xml` for
+     rpm, `.db.tar.gz` for pacman). Do not add a second flat `SHA256SUMS` on
+     top; nothing would read it.
+
+4. **The mirror grows without bound.** Every release adds artifacts to
    `/var/www/htdocs/brew/` and nothing prunes old versions, which is why the
    download had reached 527 files. Whatever is decided about the manifest, a
    retention policy for old versions would keep this from recurring.

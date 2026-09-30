@@ -260,8 +260,8 @@ runs:
         apt-ftparchive -c apt-ftparchive.conf release repo/dists/stable > repo/dists/stable/Release
 
         if [ -n "${{ inputs.gpg_key }}" ]; then
-          mkdir -p /$HOME/.gnupg
-          chmod 700 /$HOME/.gnupg
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
           echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
           mkdir -p repo/keyrings
           gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/keyrings/archive-key.gpg
