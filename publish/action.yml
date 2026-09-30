@@ -565,7 +565,7 @@ runs:
         # already there, instead of shipping a local one. Returns a few tens
         # of KB of text, not the artifacts. Skipped when the host has neither
         # sha256sum nor shasum rather than guessing at a format.
-        if ! ssh -F $HOME/.ssh/config "${{ inputs.user }}@${{ inputs.host }}" '
+        ssh -F $HOME/.ssh/config "${{ inputs.user }}@${{ inputs.host }}" '
           cd /var/www/htdocs/brew 2>/dev/null || exit 0
           if command -v sha256sum >/dev/null 2>&1; then
             HASH="sha256sum"
@@ -578,20 +578,18 @@ runs:
           TMP="SHA256SUMS.new.$$"
           find . -type f \
             -not -name "SHA256SUMS" -not -name "SHA256SUMS.asc" \
-            -not -name "key.pub" -not -name "*.new.*" \
-            | LC_ALL=C sort \
+            -not -name "key.pub" -not -name "*.new.*" 2>/dev/null \
+            | LC_ALL=C sort 2>/dev/null \
             | xargs $HASH > "$TMP" 2>/dev/null || true
-          # Only replace the manifest if it produced a sane one.
-          if [ ! -s "$TMP" ]; then
-            echo "⚠️  generated manifest is empty; keeping existing" >&2
+          if [ -s "$TMP" ]; then
+            mv "$TMP" SHA256SUMS 2>/dev/null || rm -f "$TMP"
+            echo "cumulative manifest now lists $(wc -l < SHA256SUMS 2>/dev/null || echo unknown) artifacts" >&2
+          else
             rm -f "$TMP"
-            exit 0
+            echo "⚠️  generated manifest empty; leaving manifest untouched" >&2
           fi
-          mv "$TMP" SHA256SUMS
-          echo "cumulative manifest now lists $(wc -l < SHA256SUMS) artifacts"
-        '; then
-          echo "⚠️  could not rebuild cumulative brew manifest; continuing" >&2
-        fi
+          exit 0
+        ' || echo "⚠️  could not rebuild cumulative brew manifest; continuing" >&2
 
         # The host rebuilt the manifest but cannot sign it: the key is a CI
         # secret and is not on the host. Pull the few tens of KB of text back,
