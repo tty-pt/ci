@@ -174,8 +174,18 @@ runs:
 
         find dist -path "*-${{ inputs.format }}-*"
 
-        rsync -avz -e "ssh -F $HOME/.ssh/config" \
-          "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/" repo/
+        # Brew installs fetch straight from the GitHub release asset: the
+        # formula carries an inline sha256 of that tarball (see Generate
+        # formula below), so no client ever reads a host-side brew mirror.
+        # Pulling the mirror down meant re-fetching every artifact every
+        # package has ever built -- 527 files and growing -- before a single
+        # release could finish, and that transfer is what timed nd-level's
+        # publish out. Only the formats a client resolves against the host
+        # are mirrored; pacman is one, via the Server = line further down.
+        if [ "${{ inputs.format }}" != "brew" ]; then
+          rsync -avz -e "ssh -F $HOME/.ssh/config" \
+            "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/" repo/
+        fi
 
         cd repo
         find ../dist -mindepth 2 -maxdepth 2 \
@@ -400,16 +410,29 @@ runs:
       if: inputs.format == 'brew'
       shell: sh
       run: |
+        # repo/ is this build only now that the brew mirror is not
+        # mirrored, so this manifest lists this version's artifacts rather
+        # than every tarball the tap has ever seen -- which is what a
+        # versions/<v>/ path implies anyway.
+        mkdir -p "repo/versions/${{ env.VERSION }}"
         ( cd "repo" && \
-          shasum -a 256 `find . -type f` > SHA256SUMS )
+          shasum -a 256 `find . -type f -not -path './versions/*' -not -name SHA256SUMS` ) \
+          > "repo/versions/${{ env.VERSION }}/SHA256SUMS"
 
         if [ -n "${{ inputs.gpg_key }}" ]; then
-          mkdir -p "/$HOME/.gnupg"
-          chmod 700 "/$HOME/.gnupg"
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
           echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
-          ( cd "repo/versions/${{ env.VERSION }}" && \
-            gpg --batch --yes --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
-                --detach-sign --armor -u "${{ inputs.gpg_keyid }}" SHA256SUMS || true )
+          # This cd'd into a versions/ dir that no step ever created, so the
+          # && short-circuited and `|| true` swallowed it: no brew signature
+          # has ever actually been produced. The mkdir above makes the target
+          # real. Stay non-fatal -- an unsigned brew mirror is still usable --
+          # but stop failing silently, which is how this hid for so long.
+          if ! gpg --batch --yes --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
+                --detach-sign --armor -u "${{ inputs.gpg_keyid }}" \
+                "repo/versions/${{ env.VERSION }}/SHA256SUMS"; then
+            echo "⚠️ Could not sign ${{ env.VERSION }} SHA256SUMS; publishing unsigned" >&2
+          fi
           # publish pubkey for users
           gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/key.pub || true
         fi
@@ -508,9 +531,13 @@ runs:
       shell: bash
 
     - name: Update repo
-      if: inputs.format != 'openbsd' && inputs.format != 'winget'
+      if: inputs.format != 'openbsd' && inputs.format != 'winget' && inputs.format != 'brew'
       shell: sh
       run: |
+        # The mirror is read-only history for every format that has one
+        # (pacman via its Server = line, apk/rpm via repodata); brew is
+        # excluded because its formula resolves against the GitHub release
+        # asset, so there is nothing on the host for it to serve.
         echo "Syncing repository..."
         rsync -avz -e "ssh -F $HOME/.ssh/config" \
           repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/"
