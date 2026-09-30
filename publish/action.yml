@@ -540,8 +540,88 @@ runs:
         # this transfers ~5 files instead of the mirror's whole history. Do
         # not re-add brew to the mirror here without doing the same there.
         echo "Syncing repository..."
-        rsync -avz -e "ssh -F $HOME/.ssh/config" \
-          repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/"
+        if [ "${{ inputs.format }}" = "brew" ]; then
+          # The root SHA256SUMS on the host is cumulative: one line per
+          # artifact of every package. For brew we no longer download the
+          # mirror, so the one built in Prepare repo folder covers only this
+          # build -- and rsync's default quick-check is size+mtime, so a
+          # differing size means it is transferred and the cumulative
+          # manifest is replaced by a 5-line one. Exclude it: a short
+          # manifest at that path is worse than none, since it looks
+          # authoritative. The cumulative manifest is rebuilt on the host in
+          # the next step, where all the files actually are.
+          rsync -avz --exclude '/SHA256SUMS' -e "ssh -F $HOME/.ssh/config" \
+            repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/"
+        else
+          rsync -avz -e "ssh -F $HOME/.ssh/config" \
+            repo/ "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/"
+        fi
+
+    - name: Rebuild cumulative brew manifest
+      if: inputs.format == 'brew'
+      shell: sh
+      run: |
+        # Regenerate the host's cumulative SHA256SUMS from the files that are
+        # already there, instead of shipping a local one. Returns a few tens
+        # of KB of text, not the artifacts. Skipped when the host has neither
+        # sha256sum nor shasum rather than guessing at a format.
+        ssh -F $HOME/.ssh/config "${{ inputs.user }}@${{ inputs.host }}" '
+          set -e
+          cd /var/www/htdocs/brew || exit 1
+          if command -v sha256sum >/dev/null 2>&1; then
+            HASH="sha256sum"
+          elif command -v shasum >/dev/null 2>&1; then
+            HASH="shasum -a 256"
+          else
+            echo "no sha256sum or shasum on host; leaving manifest untouched" >&2
+            exit 3
+          fi
+          TMP="SHA256SUMS.new.$$"
+          find . -type f \
+            -not -name "SHA256SUMS" -not -name "SHA256SUMS.asc" \
+            -not -name "key.pub" -not -name "*.new.*" \
+            | LC_ALL=C sort \
+            | xargs $HASH > "$TMP"
+          # Only replace the manifest if it produced a sane one.
+          if [ ! -s "$TMP" ]; then
+            echo "generated manifest is empty; keeping existing" >&2
+            rm -f "$TMP"; exit 4
+          fi
+          mv "$TMP" SHA256SUMS
+          echo "cumulative manifest now lists $(wc -l < SHA256SUMS) artifacts"
+        '
+
+        # The host rebuilt the manifest but cannot sign it: the key is a CI
+        # secret and is not on the host. Pull the few tens of KB of text back,
+        # sign it here, and push the signature up. That gives the host a signed
+        # cumulative manifest without ever transferring an artifact.
+        if [ -n "${{ inputs.gpg_key }}" ]; then
+          ssh -F $HOME/.ssh/config "${{ inputs.user }}@${{ inputs.host }}" \
+            'cat /var/www/htdocs/brew/SHA256SUMS' > repo/HOST-SHA256SUMS
+          if [ ! -s repo/HOST-SHA256SUMS ]; then
+            echo "⚠️ Could not read back the cumulative manifest; leaving it unsigned" >&2
+          else
+            mkdir -p "$HOME/.gnupg"
+            chmod 700 "$HOME/.gnupg"
+            echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
+            if gpg --batch --yes --pinentry-mode loopback \
+                  --passphrase "${{ inputs.gpg_pass }}" \
+                  --detach-sign --armor -u "${{ inputs.gpg_keyid }}" \
+                  repo/HOST-SHA256SUMS; then
+              rsync -avz -e "ssh -F $HOME/.ssh/config" \
+                repo/HOST-SHA256SUMS \
+                "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/brew/SHA256SUMS.asc"
+              # Name the signature as the manifest implies, not as our local
+              # staging file was named.
+              ssh -F $HOME/.ssh/config "${{ inputs.user }}@${{ inputs.host }}" \
+                'mv /var/www/htdocs/brew/HOST-SHA256SUMS.asc /var/www/htdocs/brew/SHA256SUMS.asc'
+              echo "✅ Signed the cumulative manifest ($(wc -l < repo/HOST-SHA256SUMS) artifacts)"
+            else
+              echo "⚠️ Could not sign the cumulative manifest; publishing unsigned" >&2
+            fi
+            rm -f repo/HOST-SHA256SUMS
+          fi
+        fi
 
     - name: Publish OpenBSD repo
       if: inputs.format == 'openbsd'
