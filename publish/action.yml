@@ -133,10 +133,33 @@ runs:
     - name: Acquire lock
       shell: sh
       run: |
-        echo "⏳ Waiting for remote lock..."
+        echo "⏳ Waiting for remote lock (10 min timeout)..."
         ssh -F $HOME/.ssh/config ${{ inputs.host }} "
           cd /var/www/htdocs/${{ env.REPO }}
+          tries=0
           while ! mkdir publish.lock 2>/dev/null; do
+            tries=\$((tries + 1))
+            if [ \$tries -ge 300 ]; then
+              echo '❌ Timed out after 10 min waiting for publish.lock.' >&2
+              echo '--- lock diagnostics ---' >&2
+              ls -la publish.lock >&2 || true
+              cat publish.lock/pid 2>/dev/null >&2 || echo '(no pid file)' >&2
+              exit 1
+            fi
+            # Break locks older than 30 min: a previous run died mid-publish
+            # (cancelled run, lost runner, hung SSH) and never reached
+            # Release lock, which would otherwise wedge every later publish
+            # behind it with no visibility. find -mmin is portable (GNU/BSD).
+            if [ -d publish.lock ] && [ -n \"\$(find publish.lock -mmin +30 2>/dev/null)\" ]; then
+              holder=\$(cat publish.lock/pid 2>/dev/null || echo unknown)
+              echo \"⚠️ Breaking stale lock (older than 30 min, holder \$holder)\" >&2
+              rm -rf publish.lock
+              continue
+            fi
+            if [ \$((tries % 30)) -eq 0 ]; then
+              holder=\$(cat publish.lock/pid 2>/dev/null || echo unknown)
+              echo \"… still waiting (\$((tries * 2))s, holder \$holder)\" >&2
+            fi
             sleep 2
           done
           echo \$\$ > publish.lock/pid
@@ -464,7 +487,24 @@ runs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git add Formula/*.rb
         git commit -m "Update ${{ inputs.name }} to v${{ env.VERSION }} (${{ github.ref_name }})" || true
-        git push origin main || echo "No changes to push."
+        # The tap is shared by every package release: pull-rebase and retry
+        # so concurrent publishes don't silently drop this formula (the old
+        # `git push || echo` swallowed genuine push conflicts without a
+        # trace). Per-package files, so rebases are clean.
+        pushed=""
+        for attempt in 1 2 3 4 5; do
+          if git push origin main; then
+            pushed="yes"
+            break
+          fi
+          echo "Tap push conflict (attempt $attempt/5), rebasing onto latest..."
+          sleep 5
+          git pull --rebase origin main || { git rebase --abort || true; }
+        done
+        if [ -z "$pushed" ]; then
+          echo "❌ Could not push formula to tty-pt/tap after 5 attempts" >&2
+          exit 1
+        fi
       shell: bash
 
     - name: Update repo
