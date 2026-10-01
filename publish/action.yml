@@ -595,9 +595,13 @@ runs:
         # secret and is not on the host. Pull the few tens of KB of text back,
         # sign it here, and push the signature up. That gives the host a signed
         # cumulative manifest without ever transferring an artifact.
+        #
+        # Only attempt this if the rebuild actually produced a manifest. If the
+        # host has no hashing tool, skip signing entirely rather than pushing a
+        # signature for a file we did not regenerate.
         if [ -n "${{ inputs.gpg_key }}" ]; then
           ssh -F $HOME/.ssh/config "${{ inputs.user }}@${{ inputs.host }}" \
-            'cat /var/www/htdocs/brew/SHA256SUMS' > repo/HOST-SHA256SUMS
+            'cat /var/www/htdocs/brew/SHA256SUMS' > repo/HOST-SHA256SUMS 2>/dev/null || true
           if [ ! -s repo/HOST-SHA256SUMS ]; then
             echo "⚠️ Could not read back the cumulative manifest; leaving it unsigned" >&2
           else
@@ -608,18 +612,21 @@ runs:
                   --passphrase "${{ inputs.gpg_pass }}" \
                   --detach-sign --armor -u "${{ inputs.gpg_keyid }}" \
                   repo/HOST-SHA256SUMS; then
+              # Upload the signature under its final name directly, so there is
+              # no separate mv on the host that can fail if the upload did not
+              # happen. Sign into a file named for its destination.
+              gpg --batch --yes --pinentry-mode loopback \
+                  --passphrase "${{ inputs.gpg_pass }}" \
+                  --detach-sign --armor -u "${{ inputs.gpg_keyid }}" \
+                  --output repo/SHA256SUMS.asc repo/HOST-SHA256SUMS
               rsync -avz -e "ssh -F $HOME/.ssh/config" \
-                repo/HOST-SHA256SUMS \
+                repo/SHA256SUMS.asc \
                 "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/brew/SHA256SUMS.asc"
-              # Name the signature as the manifest implies, not as our local
-              # staging file was named.
-              ssh -F $HOME/.ssh/config "${{ inputs.user }}@${{ inputs.host }}" \
-                'mv /var/www/htdocs/brew/HOST-SHA256SUMS.asc /var/www/htdocs/brew/SHA256SUMS.asc'
               echo "✅ Signed the cumulative manifest ($(wc -l < repo/HOST-SHA256SUMS) artifacts)"
             else
               echo "⚠️ Could not sign the cumulative manifest; publishing unsigned" >&2
             fi
-            rm -f repo/HOST-SHA256SUMS
+            rm -f repo/HOST-SHA256SUMS repo/SHA256SUMS.asc
           fi
         fi
 
