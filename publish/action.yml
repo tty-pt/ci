@@ -134,6 +134,8 @@ runs:
     - name: Acquire lock
       shell: sh
       run: |
+        TOKEN="gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$$"
+        echo "$TOKEN" > "$RUNNER_TEMP/ci-publish-lock.token"
         echo "⏳ Waiting for remote lock (10 min timeout)..."
         ssh -F $HOME/.ssh/config ${{ inputs.host }} "
           cd /var/www/htdocs/${{ env.REPO }}
@@ -164,6 +166,7 @@ runs:
             sleep 2
           done
           echo \$\$ > publish.lock/pid
+          echo '$TOKEN' > publish.lock/token
           echo '✅ Remote lock acquired by PID' \$\$
         "
 
@@ -615,9 +618,23 @@ runs:
       if: always()
       shell: sh
       run: |
+        # Only release a lock we actually own. A leg that timed out acquiring
+        # still reaches this step, and deleting the winner's lock would let a
+        # third leg acquire and write the repo concurrently.
+        if [ ! -f "$RUNNER_TEMP/ci-publish-lock.token" ]; then
+          echo "⚠️  Never acquired the lock; leaving it to its owner."
+          exit 0
+        fi
+        TOKEN="$(cat "$RUNNER_TEMP/ci-publish-lock.token")"
         echo "🔓 Releasing remote lock..."
         ssh -F $HOME/.ssh/config ${{ inputs.host }} "
-          cd /var/www/htdocs/${{ env.REPO }}
-          rm -rf publish.lock
+          cd /var/www/htdocs/${{ env.REPO }} || exit 0
+          cur=\$(cat publish.lock/token 2>/dev/null || echo none)
+          if [ \"\$cur\" = '$TOKEN' ]; then
+            rm -rf publish.lock
+            echo 'released (owner \$cur)' >&2
+          else
+            echo \"not releasing: held by '\$cur', not by us\" >&2
+          fi
         " || true
         echo '✅ Remote lock released.'
