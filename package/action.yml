@@ -1201,7 +1201,7 @@ runs:
       run: |
         su builder -c '
           cd "$PWD"
-          for pkg in $( find ${{ env.iden }}.-type f ); do
+          for pkg in $( find ${{ env.iden }} -type f ); do
             echo "Signing $pkg"
             abuild-sign -k /home/builder/.abuild/${{ env.REPO_NAME }}.rsa "$pkg"
           done
