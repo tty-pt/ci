@@ -116,10 +116,11 @@ runs:
 
       shell: sh
 
-    - name: Download APK artifacts
+    - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
         path: dist
+        pattern: ${{ inputs.name }}-${{ inputs.format }}-*
 
     - name: Setup environment
       shell: sh
