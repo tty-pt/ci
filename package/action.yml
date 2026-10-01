@@ -437,6 +437,7 @@ runs:
 
         ssh -F $HOME/.ssh/config ${{ inputs.host }} "
           cd $LOCKDIR || exit 1
+          LOCKFILE=$LOCKFILE
           tries=0
           while true; do
             if mkdir \$LOCKFILE 2>/dev/null; then
