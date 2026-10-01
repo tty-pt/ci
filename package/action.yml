@@ -415,6 +415,89 @@ runs:
         deps="${{ inputs.deps_openbsd || inputs.deps }}"
         echo "deps=$deps" >> $GITHUB_ENV
 
+    - name: Acquire chroot lock (OpenBSD)
+      if: inputs.format == 'openbsd'
+      shell: sh
+      run: |
+        # The build chroot is shared by every repo. Two jobs building at once
+        # corrupt it: both mutate /usr/src/{mk,<name>,dist-openbsd/} and both
+        # run pkg_delete/pkg_add against the same package database. Serialize
+        # on a host-global lock rather than a per-ARCH one -- the package
+        # database and the /usr/src paths are not per-ARCH.
+        set -eu
+        # The lock lives in the chroot's /usr/src, which is owned by githubci
+        # and therefore also reachable as /usr/src from inside the chroot, where
+        # the heartbeat is refreshed. A path like /var/www/var/locks would be
+        # invisible from within the chroot, and githubci cannot create it
+        # anyway: doas.conf permits it only the three ci-* wrappers.
+        LOCKDIR=/var/www/var/ci-chroot/usr/src
+        LOCKFILE=$LOCKDIR/ci-chroot.lock
+        TOKEN="gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$$"
+        echo "$TOKEN" > "$RUNNER_TEMP/ci-chroot-lock.token"
+
+        ssh -F $HOME/.ssh/config ${{ inputs.host }} "
+          cd $LOCKDIR || exit 1
+          tries=0
+          while true; do
+            if mkdir \$LOCKFILE 2>/dev/null; then
+              echo '$TOKEN' > \$LOCKFILE/token
+              date +%s > \$LOCKFILE/heartbeat
+              echo \$\$ > \$LOCKFILE/pid
+              echo '✅ Chroot lock acquired' >&2
+              exit 0
+            fi
+            # Age the lock from the heartbeat, falling back to the directory's
+            # own mtime (set by mkdir, so it always exists). The fallback covers
+            # a holder that died between mkdir and the first heartbeat write,
+            # which is a sub-second window -- treating that as instantly stale
+            # would let a second job barge in on a live one.
+            if [ -f \$LOCKFILE/heartbeat ]; then
+              ref=\$(cat \$LOCKFILE/heartbeat 2>/dev/null || echo 0)
+            else
+              ref=\$(stat -c %Y \$LOCKFILE 2>/dev/null || stat -f %m \$LOCKFILE 2>/dev/null || echo 0)
+            fi
+            age=\$((\$(date +%s) - \${ref:-0}))
+            if [ \$age -gt 10800 ]; then
+              echo \"⚠️ Breaking stale chroot lock (idle \${age}s, holder \$(cat \$LOCKFILE/pid 2>/dev/null || echo unknown))\" >&2
+              rm -rf \$LOCKFILE
+              tries=0
+              continue
+            fi
+            tries=\$((tries + 1))
+            if [ \$tries -ge 1800 ]; then
+              echo '❌ Timed out after 60 min waiting for ci-chroot.lock.' >&2
+              cat \$LOCKFILE/pid 2>/dev/null >&2 || echo '(no pid file)' >&2
+              exit 1
+            fi
+            if [ \$((tries % 30)) -eq 0 ]; then
+              echo \"… still waiting (\$((tries * 2))s, holder \$(cat \$LOCKFILE/pid 2>/dev/null || echo unknown))\" >&2
+            fi
+            sleep 2
+          done
+        "
+
+    - name: Release chroot lock (OpenBSD)
+      if: always() && inputs.format == 'openbsd'
+      shell: sh
+      run: |
+        # Never release a lock we do not own: a job that timed out acquiring
+        # must not free the chroot out from under the job holding it.
+        if [ ! -f "$RUNNER_TEMP/ci-chroot-lock.token" ]; then
+          echo "⚠️  Never acquired the chroot lock; leaving it to its owner."
+          exit 0
+        fi
+        TOKEN="$(cat "$RUNNER_TEMP/ci-chroot-lock.token")"
+        ssh -F $HOME/.ssh/config ${{ inputs.host }} "
+          LOCKFILE=/var/www/var/ci-chroot/usr/src/ci-chroot.lock
+          cur=\$(cat \$LOCKFILE/token 2>/dev/null || echo none)
+          if [ \"\$cur\" = '$TOKEN' ]; then
+            rm -rf \$LOCKFILE
+            echo '🔓 Chroot lock released.' >&2
+          else
+            echo \"not releasing chroot lock: held by '\$cur', not by us\" >&2
+          fi
+        " || true
+
     - name: Package (OpenBSD)
       if: inputs.format == 'openbsd'
       shell: sh
@@ -436,6 +519,9 @@ runs:
 
         ssh -F $HOME/.ssh/config ${{ inputs.host }} doas /usr/local/sbin/ci-chroot <<'EOF'
         set -eu
+        # Refresh the holder's heartbeat so a long build is never mistaken for
+        # a dead one and broken out from under.
+        date +%s > /usr/src/ci-chroot.lock/heartbeat
         SUFFIX=$(uname -r)/packages/$(uname -m)
         MY="https://${{ inputs.host }}/openbsd/$(uname -m)/"
         OFF="$(cat /etc/installurl)/$SUFFIX/"
@@ -473,6 +559,7 @@ runs:
         make docs || true
         make DESTDIR=../$stage install
         cd ../$stage
+        date +%s > /usr/src/ci-chroot.lock/heartbeat
 
         find usr -type f
 
@@ -534,7 +621,7 @@ runs:
 
         ssh -F $HOME/.ssh/config ${{ inputs.host }} doas /usr/local/sbin/ci-chroot <<'EOF'
         cd /usr/src/
-        rm -rf mk ${{ inputs.name }} \
+        rm -rf mk ${{ inputs.name }} ${{ inputs.name }}.tar.gz \
           dist-openbsd/${{ env.ofile }}.tgz \
           stage-${{ env.iden }}
         EOF
