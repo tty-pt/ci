@@ -446,6 +446,15 @@ runs:
               echo '✅ Chroot lock acquired' >&2
               exit 0
             fi
+            # mkdir failed. It fails for two very different reasons and they
+            # must not be conflated: EEXIST means someone holds the lock and we
+            # should wait; anything else (no permission, missing parent, full
+            # disk) means we can never hold it, and retrying is futile.
+            if [ ! -d \$LOCKFILE ]; then
+              echo "❌ Cannot create \$LOCKFILE and no such lock exists -- \$LOCKDIR is not writable by \$USER." >&2
+              ls -ld \$LOCKDIR >&2
+              exit 1
+            fi
             # Age the lock from the heartbeat, falling back to the directory's
             # own mtime (set by mkdir, so it always exists). The fallback covers
             # a holder that died between mkdir and the first heartbeat write,
