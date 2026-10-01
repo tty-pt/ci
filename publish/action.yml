@@ -171,7 +171,7 @@ runs:
         "
 
     - name: Prepare repo folder
-      if: inputs.format != 'openbsd' && inputs.format != 'winget'
+      if: inputs.format != 'openbsd' && inputs.format != 'winget' && inputs.format != 'brew'
       shell: sh
       run: |
         mkdir -p repo
@@ -394,32 +394,19 @@ runs:
           gpg --export --armor "${{ inputs.gpg_keyid }}" > "key-${{ env.REPO_NAME }}.pub"
         fi
 
-    - name: Publish macOS repo
-      if: inputs.format == 'brew'
-      shell: sh
-      run: |
-        ( cd "repo" && \
-          shasum -a 256 `find . -type f` > SHA256SUMS )
-
-        if [ -n "${{ inputs.gpg_key }}" ]; then
-          mkdir -p "/$HOME/.gnupg"
-          chmod 700 "/$HOME/.gnupg"
-          echo "${{ inputs.gpg_key }}" | gpg --batch --yes --import
-          ( cd "repo/versions/${{ env.VERSION }}" && \
-            gpg --batch --yes --pinentry-mode loopback --passphrase "${{ inputs.gpg_pass }}" \
-                --detach-sign --armor -u "${{ inputs.gpg_keyid }}" SHA256SUMS || true )
-          # publish pubkey for users
-          gpg --export --armor "${{ inputs.gpg_keyid }}" > repo/key.pub || true
-        fi
-
     - name: Generate formula (BREW)
       if: inputs.format == 'brew'
       run: |
         FORMULA_PATH="${{ inputs.name }}.rb"
-        find repo -type f -name "*.tar.gz"
-        for f in $( find repo -type f -name "*.tar.gz"); do
-          shasum -a 256 $f | cut -d' ' -f1 > $f.sha
-        done
+        f_arm="dist/${{ inputs.name }}-brew-arm64/${{ env.ofilep }}-arm64.tar.gz"
+        f_int="dist/${{ inputs.name }}-brew-x86_64/${{ env.ofilep }}-x86_64.tar.gz"
+        test -f "$f_arm" && test -f "$f_int" || {
+          echo "❌ brew tarballs missing from dist/, refusing to emit a formula" >&2
+          ls -R dist >&2
+          exit 1
+        }
+        sha_arm=$(shasum -a 256 "$f_arm" | cut -d' ' -f1)
+        sha_int=$(shasum -a 256 "$f_int" | cut -d' ' -f1)
 
         CLASS_NAME="$(echo "${{ inputs.name }}" | perl -pe 's/(?:^|[-_])([a-z])/\u$1/g')"
 
@@ -430,10 +417,10 @@ runs:
           URL_PREFIX="https://github.com/${{ github.repository }}/releases/download/v${VERSION}/${{ env.ofilep }}"
           echo "  if Hardware::CPU.arm?"
           echo "    url \"$URL_PREFIX-arm64.tar.gz\""
-          echo "    sha256 \"$(cat repo/$ofilep-arm64.tar.gz.sha)\""
+          echo "    sha256 \"$sha_arm\""
           echo "  else"
           echo "    url \"$URL_PREFIX-x86_64.tar.gz\""
-          echo "    sha256 \"$(cat repo/$ofilep-x86_64.tar.gz.sha)\""
+          echo "    sha256 \"$sha_int\""
           echo "  end"
           echo "  version \"${{ env.VERSION }}\""
 
@@ -506,7 +493,7 @@ runs:
       shell: bash
 
     - name: Update repo
-      if: inputs.format != 'openbsd' && inputs.format != 'winget'
+      if: inputs.format != 'openbsd' && inputs.format != 'winget' && inputs.format != 'brew'
       shell: sh
       run: |
         echo "Syncing repository..."
