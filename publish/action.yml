@@ -179,6 +179,7 @@ runs:
         find dist -path "*-${{ inputs.format }}-*"
 
         rsync -avz -e "ssh -F $HOME/.ssh/config" \
+          --exclude='/publish.lock/' \
           "${{ inputs.user }}@${{ inputs.host }}:/var/www/htdocs/${{ env.REPO }}/" repo/
 
         cd repo
@@ -186,13 +187,6 @@ runs:
           -path "*-${{ inputs.format }}-*" \
           -exec cp -r {} . \;
 
-        if [ "$(uname)" = "Darwin" ]; then
-          CHECKSUM="shasum -a 256"
-        else
-          CHECKSUM="sha256sum"
-        fi
-
-        $CHECKSUM `find . -type f` > SHA256SUMS
         cd - 2>/dev/null
 
         echo REPO FOLDER INIT
