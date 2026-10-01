@@ -486,28 +486,6 @@ runs:
           done
         "
 
-    - name: Release chroot lock (OpenBSD)
-      if: always() && inputs.format == 'openbsd'
-      shell: sh
-      run: |
-        # Never release a lock we do not own: a job that timed out acquiring
-        # must not free the chroot out from under the job holding it.
-        if [ ! -f "$RUNNER_TEMP/ci-chroot-lock.token" ]; then
-          echo "⚠️  Never acquired the chroot lock; leaving it to its owner."
-          exit 0
-        fi
-        TOKEN="$(cat "$RUNNER_TEMP/ci-chroot-lock.token")"
-        ssh -F $HOME/.ssh/config ${{ inputs.host }} "
-          LOCKFILE=/var/www/var/ci-chroot/usr/src/ci-chroot.lock
-          cur=\$(cat \$LOCKFILE/token 2>/dev/null || echo none)
-          if [ \"\$cur\" = '$TOKEN' ]; then
-            rm -rf \$LOCKFILE
-            echo '🔓 Chroot lock released.' >&2
-          else
-            echo \"not releasing chroot lock: held by '\$cur', not by us\" >&2
-          fi
-        " || true
-
     - name: Package (OpenBSD)
       if: inputs.format == 'openbsd'
       shell: sh
@@ -635,6 +613,28 @@ runs:
           dist-openbsd/${{ env.ofile }}.tgz \
           stage-${{ env.iden }}
         EOF
+
+    - name: Release chroot lock (OpenBSD)
+      if: always() && inputs.format == 'openbsd'
+      shell: sh
+      run: |
+        # Never release a lock we do not own: a job that timed out acquiring
+        # must not free the chroot out from under the job holding it.
+        if [ ! -f "$RUNNER_TEMP/ci-chroot-lock.token" ]; then
+          echo "⚠️  Never acquired the chroot lock; leaving it to its owner."
+          exit 0
+        fi
+        TOKEN="$(cat "$RUNNER_TEMP/ci-chroot-lock.token")"
+        ssh -F $HOME/.ssh/config ${{ inputs.host }} "
+          LOCKFILE=/var/www/var/ci-chroot/usr/src/ci-chroot.lock
+          cur=\$(cat \$LOCKFILE/token 2>/dev/null || echo none)
+          if [ \"\$cur\" = '$TOKEN' ]; then
+            rm -rf \$LOCKFILE
+            echo '🔓 Chroot lock released.' >&2
+          else
+            echo \"not releasing chroot lock: held by '\$cur', not by us\" >&2
+          fi
+        " || true
 
     - name: Prepare builder for APK
       if: inputs.format == 'apk' || inputs.format == 'pacman'
