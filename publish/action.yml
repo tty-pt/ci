@@ -132,13 +132,15 @@ runs:
         fi
 
     - name: Acquire lock
+      if: inputs.format != 'brew'
       shell: sh
       run: |
         TOKEN="gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$$"
         echo "$TOKEN" > "$RUNNER_TEMP/ci-publish-lock.token"
         echo "⏳ Waiting for remote lock (10 min timeout)..."
         ssh -F $HOME/.ssh/config ${{ inputs.host }} "
-          cd /var/www/htdocs/${{ env.REPO }}
+          mkdir -p /var/www/htdocs/${{ env.REPO }}
+          cd /var/www/htdocs/${{ env.REPO }} || exit 1
           tries=0
           while ! mkdir publish.lock 2>/dev/null; do
             tries=\$((tries + 1))
@@ -596,7 +598,7 @@ runs:
         ENDSSH
 
     - name: Release lock
-      if: always()
+      if: always() && inputs.format != 'brew'
       shell: sh
       run: |
         # Only release a lock we actually own. A leg that timed out acquiring
