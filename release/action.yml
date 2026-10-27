@@ -70,11 +70,43 @@ runs:
 
     - name: Extract release notes
       if: ${{ inputs.generate_release_notes == 'true' && startsWith(github.ref, 'refs/tags/') }}
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         TAG=${GITHUB_REF_NAME#v}
+        PREV_TAG=""
+
+        if command -v gh >/dev/null 2>&1 && [ -n "${GITHUB_TOKEN:-}" ]; then
+          # Find latest published non-draft release whose version is strictly less than TAG
+          PREV_TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq '[.[] | select(.draft == false) | .tag_name] | .[]' 2>/dev/null | \
+            sed 's/^[vV]//' | \
+            grep -vx "$TAG" | \
+            {
+              while IFS= read -r rel; do
+                if [ -n "$rel" ] && [ "$(printf '%s\n%s\n' "$rel" "$TAG" | sort -V | head -n1)" = "$rel" ] && [ "$rel" != "$TAG" ]; then
+                  echo "$rel"
+                fi
+              done
+            } | sort -V | tail -n1 || true)
+          if [ -n "$PREV_TAG" ]; then
+            echo "Determined previous release: $PREV_TAG"
+          fi
+        fi
 
         if [ -f CHANGELOG.md ]; then
-          awk "/^## \\[$TAG\\]|^## $TAG/ {found=1; next} /^## \\[/ && found {exit} found {print}" CHANGELOG.md > RELEASE_NOTES.md
+          SCRIPT="${{ github.action_path }}/../scripts/release-notes.sh"
+          if [ -f "$SCRIPT" ]; then
+            bash "$SCRIPT" CHANGELOG.md "$TAG" "$PREV_TAG" > RELEASE_NOTES.md || true
+          elif [ -f scripts/release-notes.sh ]; then
+            bash scripts/release-notes.sh CHANGELOG.md "$TAG" "$PREV_TAG" > RELEASE_NOTES.md || true
+          else
+            curl -fsSL "https://raw.githubusercontent.com/tty-pt/ci/main/scripts/release-notes.sh" -o /tmp/release-notes.sh 2>/dev/null || true
+            if [ -f /tmp/release-notes.sh ]; then
+              bash /tmp/release-notes.sh CHANGELOG.md "$TAG" "$PREV_TAG" > RELEASE_NOTES.md || true
+            fi
+          fi
         fi
 
         if [ ! -s RELEASE_NOTES.md ]; then
