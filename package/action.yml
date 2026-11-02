@@ -625,14 +625,19 @@ runs:
           fi
         " || true
 
-    - name: Prepare builder for APK
+    - name: Prepare builder for APK and PACMAN
       if: inputs.format == 'apk' || inputs.format == 'pacman'
       run: |
         if ! id builder >/dev/null 2>&1; then
-          adduser -D builder
+          if command -v useradd >/dev/null 2>&1; then
+            useradd -m -s /bin/bash builder 2>/dev/null || true
+          elif command -v adduser >/dev/null 2>&1; then
+            adduser -D builder 2>/dev/null || true
+          fi
         fi
+        echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers 2>/dev/null || true
         mkdir -p /home/builder/.abuild
-        chown -R builder:builder /home/builder
+        chown -R builder:builder /home/builder 2>/dev/null || true
       shell: sh
 
     - name: Build and stage project
@@ -986,8 +991,12 @@ runs:
         '
 
         cd ${{ env.iden }}
-        rm *debug* || true
-        mv *.pkg.tar.zst ${{ env.ofile }}.pkg.tar.zst
+        rm -f *debug* || true
+        for f in *.pkg.tar.zst; do
+          if [ -f "$f" ] && [ "$f" != "${{ env.ofile }}.pkg.tar.zst" ]; then
+            mv "$f" "${{ env.ofile }}.pkg.tar.zst"
+          fi
+        done
       shell: sh
 
     - name: Build Msys zip
