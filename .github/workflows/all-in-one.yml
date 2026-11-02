@@ -316,7 +316,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib clang
+          sudo apt-get install -y gcc-multilib clang wasi-libc
 
       - name: Build and publish NPM package
         shell: bash
