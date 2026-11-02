@@ -132,7 +132,7 @@ runs:
         fi
 
     - name: Acquire lock
-      if: inputs.format != 'brew'
+      if: inputs.format != 'brew' && inputs.format != 'winget' && inputs.format != 'openbsd'
       shell: sh
       run: |
         TOKEN="gh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$$"
@@ -630,7 +630,7 @@ runs:
         fi
 
     - name: Release lock
-      if: always() && inputs.format != 'brew' && inputs.format != 'npm'
+      if: always() && inputs.format != 'brew' && inputs.format != 'npm' && inputs.format != 'winget' && inputs.format != 'openbsd'
       shell: sh
       run: |
         # Only release a lock we actually own. A leg that timed out acquiring
