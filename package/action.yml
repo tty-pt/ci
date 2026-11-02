@@ -147,6 +147,19 @@ runs:
         VERSION=${GITHUB_REF_NAME#v}
         echo "VERSION=$VERSION" >> $GITHUB_ENV
 
+        # Enforce version parity with git release tag
+        if [ -n "$GITHUB_REF_NAME" ] && [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+          for pc in *.pc; do
+            if [ -f "$pc" ]; then
+              pc_ver=$(grep -i '^Version:' "$pc" | head -n 1 | awk '{print $2}')
+              if [ -n "$pc_ver" ] && [ "$pc_ver" != "$VERSION" ]; then
+                echo "::error::Pkg-config version in $pc ($pc_ver) does not match release tag ($VERSION)!"
+                exit 1
+              fi
+            fi
+          done
+        fi
+
         # Set PREFIX based on format
         if [ "${{ inputs.format }}" = "pacman_mingw" ] || [ "${{ inputs.format }}" = "winget" ]; then
           echo "PREFIX=/mingw64" >> $GITHUB_ENV
@@ -1112,8 +1125,10 @@ runs:
     - name: Generate APKBUILD
       if: inputs.format == 'apk'
       run: |
+        maint_host="${{ inputs.host }}"
+        [ -z "$maint_host" ] && maint_host="tty.pt"
         {
-          echo "# Maintainer: ${{ inputs.host }} repo <repo@${{ inputs.host }}>"
+          echo "# Maintainer: $maint_host repo <repo@$maint_host>"
           echo "pkgname=${{ inputs.name }}"
           echo "pkgver=${{ env.VERSION }}"
           echo "pkgrel=1"
@@ -1121,7 +1136,7 @@ runs:
           echo "url=\"https://github.com/${{ github.repository }}\""
           echo "arch=\"$(uname -m)\""
           echo "license=\"MIT\""
-          echo "maintainer=\"${{ inputs.host }} repo <repo@${{ inputs.host }}>\""
+          echo "maintainer=\"$maint_host repo <repo@$maint_host>\""
           if [ -n "${{ env.deps }}" ]; then
             echo "depends=\"$(echo ${{ env.deps }} | tr ',' ' ')\""
           fi
