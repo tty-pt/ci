@@ -312,6 +312,12 @@ jobs:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Install build toolchain for WASM
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib clang
+
       - name: Build and publish NPM package
         shell: bash
         env:
@@ -336,8 +342,9 @@ jobs:
             if [ -n "$TAG_VERSION" ]; then
               npm version "$TAG_VERSION" --no-git-tag-version --allow-same-version || true
             fi
-            npm install --ignore-scripts || true
-            npm run build || true
+            npm install --ignore-scripts
+            npm run build
+            npm test
             if [ -n "$NODE_AUTH_TOKEN" ]; then
               npm publish --access public
               echo "✅ Successfully published NPM package to registry!"
