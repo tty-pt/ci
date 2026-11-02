@@ -210,7 +210,9 @@ runs:
           mkdir -p "$target"
           test "$deb" != "./$target/${pkg}_${ver}_${arch}.deb" || continue
           mv "$deb" "$target/${pkg}_${ver}_${arch}.deb"
-          mv "$deb.asc" "$target/${pkg}_${ver}_${arch}.deb.asc"
+          if [ -f "$deb.asc" ]; then
+            mv "$deb.asc" "$target/${pkg}_${ver}_${arch}.deb.asc"
+          fi
         done
         cd - 2>/dev/null
 
