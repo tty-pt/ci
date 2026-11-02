@@ -134,6 +134,18 @@ on:
         required: false
       NPM_TOKEN:
         required: false
+      OPENBSD_HOST:
+        required: false
+      OPENBSD_USER:
+        required: false
+      OPENBSD_SSH_KEY:
+        required: false
+      OPENBSD_GPG_PRIVATE_KEY:
+        required: false
+      OPENBSD_GPG_PASSPHRASE:
+        required: false
+      OPENBSD_GPG_KEY_ID:
+        required: false
 
 jobs:
   test:
@@ -214,12 +226,12 @@ jobs:
           gpg_keyid: ${{ secrets.GPG_KEYID }}
           abuild_key: ${{ secrets.ABUILD_PRIVATE_KEY || '' }}
           abuild_pub: ${{ secrets.ABUILD_PUBLIC_KEY || '' }}
-          host: ${{ secrets.HOST || '' }}
-          user: ${{ secrets.USER || '' }}
-          ssh_key: ${{ secrets.SSH_KEY || '' }}
+          host: ${{ secrets.HOST || secrets.OPENBSD_HOST || '' }}
+          user: ${{ secrets.USER || secrets.OPENBSD_USER || '' }}
+          ssh_key: ${{ secrets.SSH_KEY || secrets.OPENBSD_SSH_KEY || '' }}
 
   publish:
-    if: always() && inputs.run_package && inputs.run_publish && !cancelled() && needs.package.result != 'cancelled'
+    if: inputs.run_package && inputs.run_publish
     needs: package
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.image || null }}
