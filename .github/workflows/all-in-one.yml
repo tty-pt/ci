@@ -76,7 +76,7 @@ on:
       run_tests:
         description: "Run shared test phase before packaging"
         required: false
-        default: false
+        default: true
         type: boolean
       test_setup:
         description: "Optional shell setup command before tests"
