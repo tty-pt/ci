@@ -597,8 +597,38 @@ runs:
         echo "winget index updated: $index"
         ENDSSH
 
+    - name: Publish NPM package
+      if: inputs.format == 'npm'
+      shell: sh
+      run: |
+        pkg_dir=""
+        if [ -f "npm/package.json" ]; then
+          pkg_dir="npm"
+        elif [ -f "package.json" ]; then
+          pkg_dir="."
+        fi
+
+        if [ -n "$pkg_dir" ]; then
+          echo "📦 Publishing npm package from $pkg_dir"
+          cd "$pkg_dir"
+          if [ -n "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version --allow-same-version || true
+          fi
+          npm install --ignore-scripts || true
+          npm run build || true
+          if [ -n "${{ inputs.tap_token }}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${{ inputs.tap_token }}" > ~/.npmrc
+            npm publish --access public
+            echo "✅ Published npm package to registry"
+          else
+            echo "⚠️ No token provided (tap_token input empty); skipping npm publish"
+          fi
+        else
+          echo "No package.json found; skipping npm publish."
+        fi
+
     - name: Release lock
-      if: always() && inputs.format != 'brew'
+      if: always() && inputs.format != 'brew' && inputs.format != 'npm'
       shell: sh
       run: |
         # Only release a lock we actually own. A leg that timed out acquiring

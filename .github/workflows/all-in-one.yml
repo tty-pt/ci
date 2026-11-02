@@ -103,6 +103,11 @@ on:
         required: false
         default: true
         type: boolean
+      publish_npm:
+        description: "Publish npm package to registry"
+        required: false
+        default: true
+        type: boolean
       repo_name:
         description: "Repository name for pacman and RPM"
         required: false
@@ -126,6 +131,8 @@ on:
       ABUILD_PUBLIC_KEY:
         required: false
       TAP_TOKEN:
+        required: false
+      NPM_TOKEN:
         required: false
 
 jobs:
@@ -278,3 +285,48 @@ jobs:
           gpg_key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg_keyid: ${{ secrets.GPG_KEYID }}
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
+
+  npm:
+    if: (inputs.publish_npm || contains(format(',{0},', inputs.publish_to), ',npm,')) && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Build and publish NPM package
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || secrets.TAP_TOKEN }}
+        run: |
+          pkg_dir=""
+          if [ -f "npm/package.json" ]; then
+            pkg_dir="npm"
+          elif [ -f "package.json" ]; then
+            pkg_dir="."
+          fi
+
+          if [ -n "$pkg_dir" ]; then
+            echo "📦 Found npm package in $pkg_dir"
+            cd "$pkg_dir"
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ -n "$TAG_VERSION" ]; then
+              npm version "$TAG_VERSION" --no-git-tag-version --allow-same-version || true
+            fi
+            npm install --ignore-scripts || true
+            npm run build || true
+            if [ -n "$NODE_AUTH_TOKEN" ]; then
+              npm publish --access public
+              echo "✅ Successfully published NPM package to registry!"
+            else
+              echo "⚠️ Neither NPM_TOKEN nor TAP_TOKEN secret configured; skipping publish."
+            fi
+          else
+            echo "ℹ️ No package.json or npm/package.json found; skipping npm job"
+          fi

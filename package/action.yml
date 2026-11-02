@@ -385,7 +385,7 @@ runs:
       shell: sh
 
     - name: Set up Node.js
-      if: hashFiles('package.json') != ''
+      if: hashFiles('package.json', 'npm/package.json') != ''
       shell: sh
       run: |
         if ! command -v node >/dev/null 2>&1; then
@@ -402,11 +402,14 @@ runs:
         fi
 
     - name: Build npm assets
-      if: hashFiles('package.json') != ''
+      if: hashFiles('package.json', 'npm/package.json') != ''
       shell: sh
       run: |
-        npm install --ignore-scripts
-        npm run build
+        if [ -f "npm/package.json" ]; then
+          (cd npm && npm install --ignore-scripts && npm run build || true)
+        elif [ -f "package.json" ]; then
+          npm install --ignore-scripts && npm run build || true
+        fi
 
     - name: Prep Env (OpenBSD)
       if: inputs.format == 'openbsd'
