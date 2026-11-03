@@ -316,7 +316,12 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib clang wasi-libc libclang-rt-*-dev-wasm32 2>/dev/null || sudo apt-get install -y gcc-multilib clang wasi-libc || true
+          sudo apt-get install -y gcc-multilib clang wasi-libc binaryen libclang-rt-*-dev-wasm32 2>/dev/null || sudo apt-get install -y gcc-multilib clang wasi-libc binaryen || true
+
+      - name: Fetch include.mk from tty-pt/mk
+        shell: bash
+        run: |
+          [ -d "../mk" ] || git clone --depth 1 --branch main https://github.com/tty-pt/mk ../mk
 
       - name: Build and publish NPM package
         shell: bash
