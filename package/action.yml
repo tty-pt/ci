@@ -510,11 +510,6 @@ runs:
           echo "▶ ${{ inputs.name }} not previously installed — skipping uninstall"
         fi
 
-        if pkg_info -e 'libqsys-*' >/dev/null 2>&1; then
-          echo "🧹 Cleaning up legacy libqsys to prevent conflicts with libstele..."
-          pkg_delete -I -Ddependencies libqsys || true
-        fi
-
         deps="$(echo ${{ env.deps }} | tr ',' ' ')"
         echo "📦 Installing dependencies '$deps'..."
         if test ! -z "$deps"; then
