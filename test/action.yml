@@ -54,6 +54,32 @@ runs:
       shell: sh
       run: ${{ inputs.setup }}
 
+    - name: Validate Pkg-config Version Parity
+      shell: sh
+      run: |
+        TAG_VER="${GITHUB_REF_NAME#v}"
+        for pc in *.pc npm/*.pc; do
+          [ -f "$pc" ] || continue
+          pc_ver=$(grep -i '^Version:' "$pc" | head -n 1 | awk '{print $2}')
+          if [ -n "$pc_ver" ]; then
+            echo "Checking $pc (Version: $pc_ver)..."
+            if [ -n "$TAG_VER" ] && [ "$GITHUB_REF_TYPE" = "tag" ]; then
+              if [ "$pc_ver" != "$TAG_VER" ]; then
+                echo "::error::Pkg-config version in $pc ($pc_ver) does not match release tag ($TAG_VER)!"
+                exit 1
+              fi
+            fi
+            if [ -f "npm/package.json" ]; then
+              pkg_ver=$(node -p "require('./npm/package.json').version" 2>/dev/null || true)
+              if [ -n "$pkg_ver" ] && [ "$pc_ver" != "$pkg_ver" ]; then
+                echo "::error::Pkg-config version in $pc ($pc_ver) does not match npm/package.json ($pkg_ver)!"
+                exit 1
+              fi
+            fi
+          fi
+        done
+        echo "Pkg-config version validation: PASS"
+
     - name: Build and test
       shell: sh
       run: |
