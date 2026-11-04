@@ -291,7 +291,7 @@ runs:
         sudo rm -f /var/lib/man-db/auto-update
         sudo apt-get install -y doxygen
         if [ -n "$deps" ]; then
-          sudo apt-get install -y $(echo "$deps" | tr ',' ' ')
+          sudo apt-get install -o Dpkg::Options::="--force-overwrite" -y $(echo "$deps" | tr ',' ' ')
         fi
       shell: sh
 
