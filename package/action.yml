@@ -551,7 +551,8 @@ runs:
               name="$(pkg_info -f $dep | grep ^@name | head -n 1 | awk '{print $2}')"
               cate="$(pkg_info -f $dep | grep ^@comment | head -n 1 | awk '{print $2}' | awk -F= '{print $2}')"
               cate="$(echo $cate | awk -F/ '{print $1}')"
-              echo "@depend $cate:=:$name"
+              stem="$(echo "$name" | sed -E 's/-[0-9].*//')"
+              echo "@depend $cate:$stem-*:default"
             done
           fi
           find usr -type f | sort
