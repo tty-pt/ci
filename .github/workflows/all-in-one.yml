@@ -113,31 +113,6 @@ on:
         required: false
         default: "ttypt"
         type: string
-      node_addon:
-        description: "Build a Node-API prebuild per platform in the package jobs and publish one npm tarball that bundles them"
-        required: false
-        default: false
-        type: boolean
-      node_addon_formats:
-        description: "Package formats that build the Node addon (one per platform key)"
-        required: false
-        default: "rpm,brew,winget"
-        type: string
-      node_addon_libs:
-        description: "Linker flags for the Node addon (default: -l<name>)"
-        required: false
-        default: ''
-        type: string
-      node_addon_expect:
-        description: "Comma-separated platform keys that must have a prebuild before publishing"
-        required: false
-        default: "linux-x64,darwin-arm64,darwin-x64,win32-x64"
-        type: string
-      npm_build:
-        description: "Command that builds the npm package (inside npm/)"
-        required: false
-        default: "npm run build"
-        type: string
     secrets:
       HOST:
         required: false
@@ -254,9 +229,7 @@ jobs:
           host: ${{ secrets.HOST || secrets.OPENBSD_HOST || '' }}
           user: ${{ secrets.USER || secrets.OPENBSD_USER || '' }}
           ssh_key: ${{ secrets.SSH_KEY || secrets.OPENBSD_SSH_KEY || '' }}
-          node_addon: ${{ inputs.node_addon && 'true' || 'false' }}
-          node_addon_formats: ${{ inputs.node_addon_formats }}
-          node_addon_libs: ${{ inputs.node_addon_libs }}
+          node_addon: ${{ inputs.publish_npm && 'true' || 'false' }}
 
   publish:
     if: inputs.run_package && inputs.run_publish
@@ -326,78 +299,59 @@ jobs:
           gpg_keyid: ${{ secrets.GPG_KEYID }}
           gpg_pass: ${{ secrets.GPG_PASSPHRASE }}
 
-  npm:
-    if: (inputs.publish_npm || contains(format(',{0},', inputs.publish_to), ',npm,')) && !inputs.node_addon && startsWith(github.ref, 'refs/tags/')
+  # ---------------------------------------------------------------------------------------------
+  # npm. A repository with npm/package.json is an npm package; nothing needs to be declared.
+  #
+  #   npm-detect   what is there: npm/package.json, a Node addon (npm/native/*_napi.c), and which
+  #                platform prebuilds the selected package formats will produce
+  #   package      (above) also builds one self-contained Node addon per platform when there is one
+  #   npm-pack     builds the WebAssembly, adds the prebuilds, runs the tests, packs ONE tarball
+  #   npm-verify   installs that tarball into an empty project on each platform and loads it
+  #   npm-publish  publishes that very tarball (tags only); nothing is compiled when publishing
+  # ---------------------------------------------------------------------------------------------
+  npm-detect:
+    if: inputs.run_package && inputs.publish_npm
     runs-on: ubuntu-latest
-    needs: [package, publish]
+    outputs:
+      npm: ${{ steps.d.outputs.npm }}
+      native: ${{ steps.d.outputs.native }}
+      expect: ${{ steps.d.outputs.expect }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.x'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Install build toolchain for WASM
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-multilib clang wasi-libc binaryen libclang-rt-*-dev-wasm32 2>/dev/null || sudo apt-get install -y gcc-multilib clang wasi-libc binaryen || true
-
-      - name: Fetch include.mk from tty-pt/mk
-        shell: bash
-        run: |
-          [ -d "../mk" ] || git clone --depth 1 --branch main https://github.com/tty-pt/mk ../mk
-
-      - name: Build and publish NPM package
+      - name: Detect npm package and Node addon
+        id: d
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PUBLISH_TO: ${{ inputs.publish_to }}
         run: |
-          pkg_dir=""
-          if [ -f "npm/package.json" ]; then
-            pkg_dir="npm"
-          elif [ -f "package.json" ]; then
-            pkg_dir="."
+          set -eu
+          npm=false
+          native=false
+          expect=""
+          if [ -f npm/package.json ]; then npm=true; fi
+          for f in npm/native/*_napi.c; do
+            if [ -f "$f" ]; then native=true; fi
+          done
+          # Which platform prebuilds the selected package formats produce (see the package action).
+          if [ "$native" = true ]; then
+            has() { case ",$PUBLISH_TO," in *",$1,"*) return 0 ;; esac; return 1; }
+            if has rpm; then expect="$expect,linux-x64"; fi
+            if has brew; then expect="$expect,darwin-arm64,darwin-x64"; fi
+            if has winget; then expect="$expect,win32-x64"; fi
+            expect=${expect#,}
           fi
+          echo "npm=$npm native=$native expect=$expect"
+          {
+            echo "npm=$npm"
+            echo "native=$native"
+            echo "expect=$expect"
+          } >> "$GITHUB_OUTPUT"
 
-          if [ -n "$pkg_dir" ]; then
-            echo "📦 Found npm package in $pkg_dir"
-            cd "$pkg_dir"
-            TAG_VERSION="${GITHUB_REF_NAME#v}"
-            PKG_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || true)
-            if [ -n "$PKG_VERSION" ] && [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
-              echo "::error::package.json version ($PKG_VERSION) does not match release tag ($TAG_VERSION)!"
-              exit 1
-            fi
-            if [ -n "$TAG_VERSION" ]; then
-              npm version "$TAG_VERSION" --no-git-tag-version --allow-same-version || true
-            fi
-            npm install --ignore-scripts
-            npm run build
-            npm test
-            if [ -n "$NODE_AUTH_TOKEN" ]; then
-              npm publish --access public
-              echo "✅ Successfully published NPM package to registry!"
-            else
-              echo "⚠️ NPM_TOKEN secret not configured; skipping publish."
-            fi
-          else
-            echo "ℹ️ No package.json or npm/package.json found; skipping npm job"
-          fi
-
-  # ---------------------------------------------------------------------------------------------
-  # Node packages with a native addon (node_addon: true).
-  #
-  # The package jobs above build one self-contained Node-API prebuild per platform. These jobs
-  # assemble them into ONE npm tarball, verify that exact tarball on every platform, and publish
-  # that same file. Nothing is compiled when publishing.
-  # ---------------------------------------------------------------------------------------------
   npm-pack:
-    if: inputs.node_addon && inputs.run_package
-    needs: package
+    if: inputs.run_package && needs.npm-detect.outputs.npm == 'true'
+    needs: [package, npm-detect]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -421,31 +375,33 @@ jobs:
           [ -d "../mk" ] || git clone --depth 1 --branch main https://github.com/tty-pt/mk ../mk
 
       - name: Download Node addon prebuilds
+        if: needs.npm-detect.outputs.native == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: node-prebuild-*
           path: node-prebuilds
           merge-multiple: true
 
-      - name: Assemble, test and pack
+      - name: Assemble, build WebAssembly, test and pack
         shell: bash
         env:
-          EXPECT: ${{ inputs.node_addon_expect }}
-          NPM_BUILD: ${{ inputs.npm_build }}
+          EXPECT: ${{ needs.npm-detect.outputs.expect }}
+          NATIVE: ${{ needs.npm-detect.outputs.native }}
         run: |
           set -eu
-          [ -f npm/package.json ] || { echo "::error::npm/package.json not found"; exit 1; }
-          ls -l node-prebuilds
           cd npm
-          for t in ../node-prebuilds/*.tar.gz; do tar -xzf "$t" -C .; done
 
-          missing=""
-          for k in $(echo "$EXPECT" | tr ',' ' '); do
-            [ -d "prebuilds/$k" ] || missing="$missing $k"
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::missing Node addon prebuilds for:$missing"
-            exit 1
+          if [ "$NATIVE" = true ]; then
+            ls -l ../node-prebuilds
+            for t in ../node-prebuilds/*.tar.gz; do tar -xzf "$t" -C .; done
+            missing=""
+            for k in $(echo "$EXPECT" | tr ',' ' '); do
+              [ -d "prebuilds/$k" ] || missing="$missing $k"
+            done
+            if [ -n "$missing" ]; then
+              echo "::error::missing Node addon prebuilds for:$missing"
+              exit 1
+            fi
           fi
 
           if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
@@ -457,17 +413,48 @@ jobs:
             fi
           fi
 
+          # The prebuilds must be part of the tarball even if package.json forgot to list them.
+          if [ -d prebuilds ]; then
+            node -e "
+              const fs = require('fs');
+              const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              if (Array.isArray(p.files) && !p.files.includes('prebuilds')) {
+                p.files.push('prebuilds');
+                fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\\n');
+                console.log('added prebuilds to package.json files (add it to the repository too)');
+              }"
+          fi
+
           npm install --ignore-scripts
-          sh -c "$NPM_BUILD"
+
+          # WebAssembly is the portable backend every consumer gets: build it explicitly. 'npm run
+          # build' is not used when build:wasm exists because it also compiles the native addon,
+          # which belongs to the per-platform package jobs, not to this runner.
+          has_script() { node -e "const s=require('./package.json').scripts||{}; process.exit(s['$1']?0:1)"; }
+          wants_wasm=false
+          if has_script build:wasm; then
+            wants_wasm=true
+            npm run build:wasm
+          elif has_script build; then
+            npm run build
+          else
+            echo "no build script"
+          fi
+
           npm test
           npm pack --pack-destination ..
           cd ..
           tgz=$(ls ./*.tgz)
           echo "packed $tgz"
           tar -tzf "$tgz" > tarball.lst
-          for k in $(echo "$EXPECT" | tr ',' ' '); do
-            grep -qF "package/prebuilds/$k/" tarball.lst || { echo "::error::$tgz has no prebuilds/$k"; exit 1; }
-          done
+          if [ "$NATIVE" = true ]; then
+            for k in $(echo "$EXPECT" | tr ',' ' '); do
+              grep -qF "package/prebuilds/$k/" tarball.lst || { echo "::error::$tgz has no prebuilds/$k"; exit 1; }
+            done
+          fi
+          if [ "$wants_wasm" = true ]; then
+            grep -qF ".wasm" tarball.lst || { echo "::error::$tgz contains no .wasm although build:wasm exists"; exit 1; }
+          fi
           grep -v "node_modules" tarball.lst | head -60
 
       - name: Upload npm tarball
@@ -478,8 +465,8 @@ jobs:
           if-no-files-found: error
 
   npm-verify:
-    if: inputs.node_addon && inputs.run_package
-    needs: npm-pack
+    if: inputs.run_package && needs.npm-detect.outputs.npm == 'true'
+    needs: [npm-detect, npm-pack]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -497,18 +484,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Is ${{ matrix.key }} an expected platform?
-        id: gate
-        env:
-          EXPECT: ${{ inputs.node_addon_expect }}
-        run: |
-          case ",$EXPECT," in
-            *",${{ matrix.key }},"*) echo "run=true" >> "$GITHUB_OUTPUT" ;;
-            *) echo "run=false" >> "$GITHUB_OUTPUT"; echo "not expected: skipping" ;;
-          esac
-
       - name: Checkout tty-pt/ci (verification script)
-        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v4
         with:
           repository: tty-pt/ci
@@ -516,31 +492,34 @@ jobs:
           path: .ci
 
       - name: Set up Node.js
-        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20.x'
 
       - name: Download npm tarball
-        if: steps.gate.outputs.run == 'true'
         uses: actions/download-artifact@v4
         with:
           name: npm-package
           path: pkg
 
-      - name: Install the tarball into an empty project and load the addon
-        if: steps.gate.outputs.run == 'true'
+      - name: Install the tarball into an empty project and load it
+        env:
+          EXPECT: ${{ needs.npm-detect.outputs.expect }}
         run: |
           set -eu
+          # A platform that has a prebuild must load the native addon; any other platform must
+          # still install and load the package through WebAssembly.
+          mode=wasm
+          case ",$EXPECT," in *",${{ matrix.key }},"*) mode=native ;; esac
           mkdir verify
           cd verify
           npm init -y > /dev/null
           npm install ../pkg/*.tgz
-          node ../.ci/scripts/verify-node-addon.mjs "${{ matrix.key }}"
+          node ../.ci/scripts/verify-node-addon.mjs "${{ matrix.key }}" "$mode"
 
   npm-publish:
-    if: inputs.node_addon && inputs.run_package && startsWith(github.ref, 'refs/tags/')
-    needs: [npm-verify, publish]
+    if: inputs.run_package && needs.npm-detect.outputs.npm == 'true' && startsWith(github.ref, 'refs/tags/')
+    needs: [npm-detect, npm-verify, publish]
     runs-on: ubuntu-latest
     steps:
       - name: Set up Node.js

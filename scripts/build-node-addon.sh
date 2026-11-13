@@ -7,7 +7,7 @@
 # OS / CPU / libc.
 #
 # Usage:  build-node-addon.sh <outdir>
-# Env:    NODE_ADDON_LIBS    linker flags for the addon (default: -l<stem>)
+# Env:    NODE_ADDON_LIBS    linker flags (default: the -l flags of the root *.pc Libs: line, else -l<stem>)
 #         NODE_ADDON_PREFIX  install prefix of the dependencies (default: brew prefix, $PREFIX or /usr)
 #
 # Output: <outdir>/node-prebuild-<key>.tar.gz holding prebuilds/<key>/<stem>.node plus every
@@ -64,7 +64,34 @@ if [ -z "$prefix" ] && [ "$os" = darwin ] && command -v brew >/dev/null 2>&1; th
 	prefix=$(brew --prefix)
 fi
 prefix=${prefix:-${PREFIX:-/usr}}
-libs=${NODE_ADDON_LIBS:--l$stem}
+# Linker flags: the -l entries of the repository's own pkg-config file (what its consumers link),
+# unless overridden. -L entries are dropped: the build adds ./lib and the prefix itself.
+libs=${NODE_ADDON_LIBS:-}
+if [ -z "$libs" ]; then
+	for pc in ./*.pc; do
+		[ -f "$pc" ] || continue
+		while IFS= read -r line; do
+			case "$line" in
+				Libs:*)
+					for w in ${line#Libs:}; do
+						case "$w" in -l*) libs="$libs $w" ;; esac
+					done
+					;;
+			esac
+		done < "$pc"
+		break
+	done
+	# The repository's own library, even if its .pc forgot to list it (libislet's does).
+	own=$(basename "$(pwd)")
+	own=${own#lib}
+	for ext in so dylib dll; do
+		if [ -f "lib/lib$own.$ext" ]; then
+			case " $libs " in *" -l$own "*) ;; *) libs="-l$own $libs" ;; esac
+			break
+		fi
+	done
+	[ -n "$libs" ] || libs=-l$stem
+fi
 if [ "$os" = win32 ]; then cc=${CC:-gcc}; else cc=${CC:-cc}; fi
 
 work=$(mktemp -d)
