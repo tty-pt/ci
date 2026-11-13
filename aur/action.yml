@@ -84,7 +84,7 @@ runs:
         deps="${{ inputs.deps }}"
         echo "deps=$deps" > $GITHUB_ENV
 
-        pacman -Sy --noconfirm --overwrite base-devel git tar gzip zstd
+        pacman -Sy --noconfirm --overwrite "*" base-devel git tar gzip zstd
         if [ -n "$deps" ]; then
           pacman -S --noconfirm --overwrite "*" $(echo "$deps" | tr ',' ' ')
         fi

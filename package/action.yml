@@ -249,7 +249,7 @@ runs:
       shell: sh
       run: |
         if ! command -v yay >/dev/null 2>&1; then
-          pacman -Sy --noconfirm --needed git base-devel
+          pacman -Sy --noconfirm --needed --overwrite "*" git base-devel
           useradd -m -s /bin/bash aur || true
           echo "aur ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
@@ -324,9 +324,9 @@ runs:
         fi
         echo "deps=$deps" > $GITHUB_ENV
 
-        pacman -Sy --noconfirm zip doxygen
+        pacman -Sy --noconfirm --overwrite "*" zip doxygen
         if [ -n "$deps" ]; then
-          pacman -S --noconfirm $(echo "$deps" | tr ',' ' ')
+          pacman -S --noconfirm --overwrite "*" $(echo "$deps" | tr ',' ' ')
         fi
       shell: sh
 
@@ -364,7 +364,7 @@ runs:
         deps="${{ inputs.deps_winget }}"
         echo "deps=$deps" >> $GITHUB_ENV
         if [ -n "$deps" ]; then
-          pacman -S --noconfirm --needed $(echo "$deps" | tr ',' ' ')
+          pacman -S --noconfirm --needed --overwrite "*" $(echo "$deps" | tr ',' ' ')
         fi
 
     - name: Install tty.pt deps (WINGET)
@@ -1024,7 +1024,7 @@ runs:
         export RLDD="x86_64-w64-mingw32-ldd"
         export RLDD_PATH="/usr/x86_64-w64-mingw32/bin/:/usr/x86_64-w64-mingw32/lib:/mingw64/lib:/mingw64/bin"
         export RLDD_SO="dll"
-        pacman -S --noconfirm mingw-w64-ldd
+        pacman -S --noconfirm --overwrite "*" mingw-w64-ldd
 
         find $bin_dir -type f
         has_exe=""
@@ -1071,7 +1071,7 @@ runs:
         set -e
 
         echo "=== 1: pacman install ==="
-        pacman -Sy --noconfirm wine xorg-server-xvfb || true
+        pacman -Sy --noconfirm --overwrite "*" wine xorg-server-xvfb || true
         echo "=== 2: env setup ==="
         export WINEARCH=win64
         export WINEPREFIX="$PWD/wineprefix"

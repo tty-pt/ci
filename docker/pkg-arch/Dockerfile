@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=/var/lib/pacman/sync \
 # ---------- Base build stack ----------
 RUN --mount=type=cache,target=/var/lib/pacman/sync \
     --mount=type=cache,target=/var/cache/pacman/pkg \
-  pacman -S --noconfirm --needed \
+  pacman -S --noconfirm --needed --overwrite "*" \
       base-devel \
       pacman-contrib \
       gnupg \
