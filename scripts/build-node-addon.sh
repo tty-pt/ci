@@ -70,7 +70,9 @@ libs=${NODE_ADDON_LIBS:-}
 if [ -z "$libs" ]; then
 	for pc in ./*.pc; do
 		[ -f "$pc" ] || continue
+		cr=$(printf '\r')
 		while IFS= read -r line; do
+			line=${line%"$cr"} # Windows checkouts convert .pc files to CRLF
 			case "$line" in
 				Libs:*)
 					for w in ${line#Libs:}; do
