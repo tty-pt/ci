@@ -233,7 +233,16 @@ bundle_win32() {
 				for d in ./lib "$prefix/bin" "$prefix/lib" /mingw64/bin; do
 					if [ -f "$d/$dll" ]; then found=$d/$dll; break; fi
 				done
-				[ -n "$found" ] || continue # a Windows system DLL
+				if [ -z "$found" ]; then
+					# Not ours: it must be a Windows system DLL, or the addon would fail to load
+					# on a clean machine (the dependency was never installed in this job).
+					case "$dll" in
+						[Nn][Oo][Dd][Ee].[Ee][Xx][Ee]|api-ms-win-*|ext-ms-win-*) continue ;;
+					esac
+					sysdir=$(cygpath -S 2>/dev/null || echo /c/Windows/System32)
+					[ -f "$sysdir/$dll" ] && continue
+					die "$dll (needed by ${f##*/}) was not found: install it in this job (deps_winget) so it can be bundled"
+				fi
 				cp -L "$found" "$stage/$dll"
 				echo "   bundled $dll <- $found"
 				changed=1
