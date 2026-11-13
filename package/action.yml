@@ -98,6 +98,18 @@ inputs:
   ssh_key:
     description: 'Private SSH key for upload'
     required: true
+  node_addon:
+    description: 'Also build a self-contained Node-API prebuild (npm/native/*_napi.c) and upload it as node-prebuild-<os>-<cpu>'
+    required: false
+    default: 'false'
+  node_addon_formats:
+    description: 'Comma-separated formats that build the Node addon (one per platform key)'
+    required: false
+    default: 'rpm,brew,winget'
+  node_addon_libs:
+    description: 'Linker flags for the addon (default: -l<name>)'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -1313,3 +1325,32 @@ runs:
       with:
         name: ${{ env.iden }}
         path: ${{ env.iden }}/*
+
+    - name: Build Node addon prebuild
+      id: nodeaddon
+      if: inputs.node_addon == 'true' && inputs.format != 'winget' && contains(format(',{0},', inputs.node_addon_formats), format(',{0},', inputs.format))
+      env:
+        NODE_ADDON_LIBS: ${{ inputs.node_addon_libs }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: sh "$ACTION_PATH/../scripts/build-node-addon.sh" node-addon-out
+      shell: sh
+
+    - name: Build Node addon prebuild (WINGET)
+      id: nodeaddon_win
+      if: inputs.node_addon == 'true' && inputs.format == 'winget' && contains(format(',{0},', inputs.node_addon_formats), ',winget,')
+      env:
+        NODE_ADDON_LIBS: ${{ inputs.node_addon_libs }}
+        ACTION_PATH: ${{ github.action_path }}
+        PREFIX: /mingw64
+      run: |
+        export PATH="/mingw64/bin:/usr/bin:/bin:$PATH"
+        sh "$(cygpath -u "$ACTION_PATH")/../scripts/build-node-addon.sh" node-addon-out
+      shell: msys2 {0}
+
+    - name: Upload Node addon prebuild
+      if: steps.nodeaddon.outputs.key != '' || steps.nodeaddon_win.outputs.key != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: node-prebuild-${{ steps.nodeaddon.outputs.key || steps.nodeaddon_win.outputs.key }}
+        path: node-addon-out/*.tar.gz
+        if-no-files-found: error
