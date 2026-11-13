@@ -336,7 +336,7 @@ runs:
         deps="${{ inputs.deps_brew || inputs.deps }}"
         echo "deps=$deps" > $GITHUB_ENV
 
-        brew install doxygen
+        brew install doxygen make
         if [ -n "$deps" ]; then
           for dep in $(echo "$deps" | tr ',' ' '); do
             brew install "$dep" || true
@@ -655,14 +655,16 @@ runs:
     - name: Build and stage project
       if: inputs.format == 'brew'
       run: |
-        export PATH="/usr/bin:/bin:$PATH"
-
         arch="$(uname -m)"
         echo "🔧 Building for architecture: $arch"
-        make DESTDIR=$PWD/stage/$arch \
+        MAKE_CMD="make"
+        if command -v gmake >/dev/null 2>&1; then
+          MAKE_CMD="gmake"
+        fi
+        $MAKE_CMD DESTDIR=$PWD/stage/$arch \
           PREFIX=${{ env.prefix }}
-        make docs || true
-        make DESTDIR=$PWD/stage/$arch \
+        $MAKE_CMD docs || true
+        $MAKE_CMD DESTDIR=$PWD/stage/$arch \
           PREFIX=${{ env.prefix }} install
 
         mkdir -p ${{ env.iden }}
