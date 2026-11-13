@@ -1,0 +1,246 @@
+name: npm
+
+# Build once, verify, publish: the npm half of a tty-pt release.
+#
+#   pack     assemble the package (WebAssembly build, native prebuilds if any), run its tests, and
+#            pack ONE tarball
+#   verify   install that tarball into an empty project on Linux, macOS (arm64, x64) and Windows,
+#            and load it; platforms with a prebuild must load the native addon
+#   publish  publish that very tarball (tags only); nothing is compiled when publishing
+#
+# A repository that is only an npm package (npm/package.json, no OS packages) calls this directly:
+#
+#   jobs:
+#     npm:
+#       uses: tty-pt/ci/.github/workflows/npm.yml@main
+#       secrets: inherit
+#
+# tty-pt/ci's all-in-one.yml calls it for every other repository, after its package jobs have
+# uploaded the per-platform prebuilds (artifacts named node-prebuild-<os>-<cpu>).
+
+on:
+  workflow_call:
+    inputs:
+      expect:
+        description: "Comma-separated platform keys that must ship a native prebuild (empty: no addon)"
+        required: false
+        default: ''
+        type: string
+      publish:
+        description: "Allow publishing (it still only happens on tags)"
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      NPM_TOKEN:
+        required: false
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Inspect npm/package.json
+        id: inspect
+        shell: bash
+        run: |
+          set -eu
+          [ -f npm/package.json ] || { echo "::error::npm/package.json not found"; exit 1; }
+          wasm=false
+          if node -e "const s=require('./npm/package.json').scripts||{}; process.exit(s['build:wasm']?0:1)"; then wasm=true; fi
+          echo "wasm=$wasm" >> "$GITHUB_OUTPUT"
+
+      - name: Install build toolchain for WASM
+        if: steps.inspect.outputs.wasm == 'true'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib clang wasi-libc binaryen libclang-rt-*-dev-wasm32 2>/dev/null || sudo apt-get install -y gcc-multilib clang wasi-libc binaryen || true
+
+      - name: Fetch include.mk from tty-pt/mk
+        if: steps.inspect.outputs.wasm == 'true'
+        shell: bash
+        run: |
+          [ -d "../mk" ] || git clone --depth 1 --branch main https://github.com/tty-pt/mk ../mk
+
+      - name: Download Node addon prebuilds
+        if: inputs.expect != ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: node-prebuild-*
+          path: node-prebuilds
+          merge-multiple: true
+
+      - name: Assemble, build WebAssembly, test and pack
+        shell: bash
+        env:
+          EXPECT: ${{ inputs.expect }}
+        run: |
+          set -eu
+          cd npm
+
+          if [ -n "$EXPECT" ]; then
+            ls -l ../node-prebuilds
+            for t in ../node-prebuilds/*.tar.gz; do tar -xzf "$t" -C .; done
+            missing=""
+            for k in $(echo "$EXPECT" | tr ',' ' '); do
+              [ -d "prebuilds/$k" ] || missing="$missing $k"
+            done
+            if [ -n "$missing" ]; then
+              echo "::error::missing Node addon prebuilds for:$missing"
+              exit 1
+            fi
+          fi
+
+          if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            PKG_VERSION=$(node -p "require('./package.json').version")
+            if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+              echo "::error::package.json version ($PKG_VERSION) does not match release tag ($TAG_VERSION)!"
+              exit 1
+            fi
+          fi
+
+          # The prebuilds must be part of the tarball even if package.json forgot to list them.
+          if [ -d prebuilds ]; then
+            node -e "
+              const fs = require('fs');
+              const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              if (Array.isArray(p.files) && !p.files.includes('prebuilds')) {
+                p.files.push('prebuilds');
+                fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\\n');
+                console.log('added prebuilds to package.json files (add it to the repository too)');
+              }"
+          fi
+
+          npm install --ignore-scripts
+
+          # WebAssembly is the portable backend every consumer gets: build it explicitly. 'npm run
+          # build' is not used when build:wasm exists because it also compiles the native addon,
+          # which belongs to the per-platform package jobs, not to this runner.
+          has_script() { node -e "const s=require('./package.json').scripts||{}; process.exit(s['$1']?0:1)"; }
+          wants_wasm=false
+          if has_script build:wasm; then
+            wants_wasm=true
+            npm run build:wasm
+          elif has_script build; then
+            npm run build
+          else
+            echo "no build script"
+          fi
+
+          npm test
+          npm pack --pack-destination ..
+          cd ..
+          tgz=$(ls ./*.tgz)
+          echo "packed $tgz"
+          tar -tzf "$tgz" > tarball.lst
+          if [ -n "$EXPECT" ]; then
+            for k in $(echo "$EXPECT" | tr ',' ' '); do
+              grep -qF "package/prebuilds/$k/" tarball.lst || { echo "::error::$tgz has no prebuilds/$k"; exit 1; }
+            done
+          fi
+          if [ "$wants_wasm" = true ]; then
+            grep -qF ".wasm" tarball.lst || { echo "::error::$tgz contains no .wasm although build:wasm exists"; exit 1; }
+          fi
+          grep -v "node_modules" tarball.lst | head -60
+
+      - name: Upload npm tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: '*.tgz'
+          if-no-files-found: error
+
+  verify:
+    needs: pack
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            key: linux-x64
+          - runner: macos-latest
+            key: darwin-arm64
+          - runner: macos-15-intel
+            key: darwin-x64
+          - runner: windows-latest
+            key: win32-x64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout tty-pt/ci (verification script)
+        uses: actions/checkout@v4
+        with:
+          repository: tty-pt/ci
+          ref: main
+          path: .ci
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      - name: Download npm tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: pkg
+
+      - name: Install the tarball into an empty project and load it
+        env:
+          EXPECT: ${{ inputs.expect }}
+        run: |
+          set -eu
+          # A platform that has a prebuild must load the native addon; any other platform, and
+          # every package without an addon, must still install and load through WebAssembly.
+          mode=wasm
+          case ",$EXPECT," in *",${{ matrix.key }},"*) mode=native ;; esac
+          mkdir verify
+          cd verify
+          npm init -y > /dev/null
+          npm install ../pkg/*.tgz
+          node ../.ci/scripts/verify-node-addon.mjs "${{ matrix.key }}" "$mode"
+
+  publish:
+    if: inputs.publish && startsWith(github.ref, 'refs/tags/')
+    needs: [pack, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download npm tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: pkg
+
+      - name: Publish the verified tarball
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eu
+          ls -l pkg
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            # './' matters: npm reads 'pkg/x.tgz' as the GitHub shorthand user/repo and runs git
+            npm publish "./$(ls pkg/*.tgz)" --access public
+            echo "✅ Published the verified tarball to the npm registry"
+          else
+            echo "::error::NPM_TOKEN is not available to this repository (check the organization secret's repository access)"
+            exit 1
+          fi
