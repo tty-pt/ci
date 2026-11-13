@@ -326,7 +326,7 @@ jobs:
       - name: Build and publish NPM package
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || secrets.TAP_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           pkg_dir=""
           if [ -f "npm/package.json" ]; then
@@ -354,7 +354,7 @@ jobs:
               npm publish --access public
               echo "✅ Successfully published NPM package to registry!"
             else
-              echo "⚠️ Neither NPM_TOKEN nor TAP_TOKEN secret configured; skipping publish."
+              echo "⚠️ NPM_TOKEN secret not configured; skipping publish."
             fi
           else
             echo "ℹ️ No package.json or npm/package.json found; skipping npm job"
