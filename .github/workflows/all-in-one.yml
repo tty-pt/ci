@@ -542,7 +542,8 @@ jobs:
           set -eu
           ls -l pkg
           if [ -n "$NODE_AUTH_TOKEN" ]; then
-            npm publish pkg/*.tgz --access public
+            # './' matters: npm reads 'pkg/x.tgz' as the GitHub shorthand user/repo and runs git
+            npm publish "./$(ls pkg/*.tgz)" --access public
             echo "✅ Published the verified tarball to the npm registry"
           else
             echo "⚠️ NPM_TOKEN secret not configured; skipping publish (the tarball is the 'npm-package' artifact)."
