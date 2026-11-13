@@ -7,7 +7,8 @@
 # OS / CPU / libc.
 #
 # Usage:  build-node-addon.sh <outdir>
-# Env:    NODE_ADDON_LIBS    linker flags (default: the -l flags of the root *.pc Libs: line, else -l<stem>)
+# Env:    NODE_ADDON_LIBS    linker flags (default: npm/native/LIBS if present, else the -l flags of the
+#                            root *.pc Libs: line plus the repository's own library, else -l<stem>)
 #         NODE_ADDON_PREFIX  install prefix of the dependencies (default: brew prefix, $PREFIX or /usr)
 #
 # Output: <outdir>/node-prebuild-<key>.tar.gz holding prebuilds/<key>/<stem>.node plus every
@@ -67,7 +68,14 @@ prefix=${prefix:-${PREFIX:-/usr}}
 # Linker flags: the -l entries of the repository's own pkg-config file (what its consumers link),
 # unless overridden. -L entries are dropped: the build adds ./lib and the prefix itself.
 libs=${NODE_ADDON_LIBS:-}
-if [ -z "$libs" ]; then
+libs_file=0
+if [ -z "$libs" ] && [ -f npm/native/LIBS ]; then
+	# npm/native/LIBS decides the linker flags for this repository's addon. It may be empty or
+	# only comments: an addon that needs none of the repository's libraries links nothing.
+	libs_file=1
+	libs=$(grep -v '^#' npm/native/LIBS | tr '\r\n' '  ')
+fi
+if [ -z "$libs" ] && [ "$libs_file" = 0 ]; then
 	for pc in ./*.pc; do
 		[ -f "$pc" ] || continue
 		cr=$(printf '\r')
@@ -161,6 +169,9 @@ is_system_linux() {
 	case "$1" in
 		libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|libutil.so.*|libresolv.so.*) return 0 ;;
 		libnsl.so.*|libgcc_s.so.*|libstdc++.so.*|ld-linux*|ld-musl*|linux-vdso*) return 0 ;;
+		# the graphics stack comes from the driver / display server, not from the package
+		libGL.so*|libGLX.so*|libGLdispatch.so*|libOpenGL.so*|libEGL.so*|libGLESv2.so*) return 0 ;;
+		libX11.so*|libXext.so*|libxcb*.so*|libXau.so*|libXdmcp.so*|libdrm.so*|libwayland*.so*) return 0 ;;
 	esac
 	return 1
 }
