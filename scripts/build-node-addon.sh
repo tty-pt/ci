@@ -220,9 +220,13 @@ bundle_win32() {
 	while [ "$changed" = 1 ]; do
 		changed=0
 		for f in "$stage"/*; do
-			objdump -p "$f" | while read -r a b c; do
-				[ "$a $b" = "DLL Name:" ] && echo "$c"
-			done > "$work/deps"
+			# (a "cmd && echo" as the last command of a pipeline loop exits 1 under set -e)
+			objdump -p "$f" > "$work/pe"
+			: > "$work/deps"
+			cr=$(printf '\r')
+			while read -r a b c; do
+				if [ "$a $b" = "DLL Name:" ]; then echo "${c%"$cr"}" >> "$work/deps"; fi
+			done < "$work/pe"
 			while read -r dll; do
 				[ -e "$stage/$dll" ] && continue
 				found=
