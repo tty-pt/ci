@@ -21,6 +21,11 @@ name: npm
 on:
   workflow_call:
     inputs:
+      dir:
+        description: "Directory holding package.json: 'npm' (default) or '.' for a package at the repository root"
+        required: false
+        default: npm
+        type: string
       expect:
         description: "Comma-separated platform keys that must ship a native prebuild (empty: no addon)"
         required: false
@@ -48,14 +53,16 @@ jobs:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Inspect npm/package.json
+      - name: Inspect package.json
         id: inspect
         shell: bash
+        env:
+          PKG_DIR: ${{ inputs.dir }}
         run: |
           set -eu
-          [ -f npm/package.json ] || { echo "::error::npm/package.json not found"; exit 1; }
+          [ -f "$PKG_DIR/package.json" ] || { echo "::error::$PKG_DIR/package.json not found"; exit 1; }
           wasm=false
-          if node -e "const s=require('./npm/package.json').scripts||{}; process.exit(s['build:wasm']?0:1)"; then wasm=true; fi
+          if node -e "const s=require('./$PKG_DIR/package.json').scripts||{}; process.exit(s['build:wasm']?0:1)"; then wasm=true; fi
           echo "wasm=$wasm" >> "$GITHUB_OUTPUT"
 
       - name: Install build toolchain for WASM
@@ -83,13 +90,15 @@ jobs:
         shell: bash
         env:
           EXPECT: ${{ inputs.expect }}
+          PKG_DIR: ${{ inputs.dir }}
         run: |
           set -eu
-          cd npm
+          ws=$GITHUB_WORKSPACE
+          cd "$PKG_DIR"
 
           if [ -n "$EXPECT" ]; then
-            ls -l ../node-prebuilds
-            for t in ../node-prebuilds/*.tar.gz; do tar -xzf "$t" -C .; done
+            ls -l "$ws/node-prebuilds"
+            for t in "$ws"/node-prebuilds/*.tar.gz; do tar -xzf "$t" -C .; done
             missing=""
             for k in $(echo "$EXPECT" | tr ',' ' '); do
               [ -d "prebuilds/$k" ] || missing="$missing $k"
@@ -137,9 +146,13 @@ jobs:
             echo "no build script"
           fi
 
-          npm test
-          npm pack --pack-destination ..
-          cd ..
+          if has_script test; then
+            npm test
+          else
+            echo "no test script"
+          fi
+          npm pack --pack-destination "$ws"
+          cd "$ws"
           tgz=$(ls ./*.tgz)
           echo "packed $tgz"
           tar -tzf "$tgz" > tarball.lst

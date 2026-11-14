@@ -312,6 +312,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       npm: ${{ steps.d.outputs.npm }}
+      dir: ${{ steps.d.outputs.dir }}
       native: ${{ steps.d.outputs.native }}
       expect: ${{ steps.d.outputs.expect }}
     steps:
@@ -326,9 +327,16 @@ jobs:
         run: |
           set -eu
           npm=false
+          dir=npm
           native=false
           expect=""
-          if [ -f npm/package.json ]; then npm=true; fi
+          if [ -f npm/package.json ]; then
+            npm=true
+          elif [ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.name && !p.private ? 0 : 1)"; then
+            # a package at the repository root (axil-tty)
+            npm=true
+            dir=.
+          fi
           for f in npm/native/*_napi.c; do
             if [ -f "$f" ]; then native=true; fi
           done
@@ -340,9 +348,10 @@ jobs:
             if has winget; then expect="$expect,win32-x64"; fi
             expect=${expect#,}
           fi
-          echo "npm=$npm native=$native expect=$expect"
+          echo "npm=$npm dir=$dir native=$native expect=$expect"
           {
             echo "npm=$npm"
+            echo "dir=$dir"
             echo "native=$native"
             echo "expect=$expect"
           } >> "$GITHUB_OUTPUT"
@@ -354,6 +363,7 @@ jobs:
     needs: [package, publish, npm-detect]
     uses: tty-pt/ci/.github/workflows/npm.yml@main
     with:
+      dir: ${{ needs.npm-detect.outputs.dir }}
       expect: ${{ needs.npm-detect.outputs.expect }}
       publish: ${{ inputs.run_publish }}
     secrets: inherit
