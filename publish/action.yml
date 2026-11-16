@@ -526,8 +526,20 @@ runs:
             ${{ inputs.name }}-${{ env.VERSION }}.tgz
 
           echo 🧾 Generating package index...
-          rm -f index.txt index.html
+          rm -f index.txt
           ls -nlT >index.txt
+
+          chmod 644 index.txt
+          sha256 -b *.tgz > SHA256
+          doas /usr/local/sbin/ci-sign-repo
+
+          echo "✅ OpenBSD package index created at $TARGET/index.txt"
+        EOF
+
+        ssh -F "$HOME/.ssh/config" ${{ inputs.host }} <<'EOF_IDX'
+          set -eu
+          ARCH=$(uname -m)
+          cd "/var/www/htdocs/openbsd/$ARCH"
           {
             echo "<!DOCTYPE html><html><head><title>Index of /openbsd/$ARCH/</title></head><body><h1>Index of /openbsd/$ARCH/</h1><hr><pre>"
             for f in SHA256 SHA256.sig *.tgz; do
@@ -535,13 +547,8 @@ runs:
             done
             echo "</pre><hr></body></html>"
           } >index.html
-
-          chmod 644 index.txt index.html
-          sha256 -b *.tgz > SHA256
-          doas /usr/local/sbin/ci-sign-repo
-
-          echo "✅ OpenBSD package index created at $TARGET/index.txt"
-        EOF
+          chmod 644 index.html
+        EOF_IDX
 
     - name: Publish winget repo
       if: inputs.format == 'winget'
