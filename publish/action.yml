@@ -463,10 +463,10 @@ runs:
 
         echo "🔧 Normalizing formula class names in existing tap..."
         for f in "$TAP_DIR"/Formula/*.rb; do
-          [ -e "$f" ] || continue
-          n="$(basename "$f" .rb)"
+          [ -e "\$f" ] || continue
+          n="$(basename "\$f" .rb)"
           k="$(printf '%s' "$n" | perl -pe 's/(?:^|[-_])([a-z])/\u$1/g')"
-          perl -pi -e "s/^class [A-Za-z0-9_-]* < Formula/class $k < Formula/" "$f"
+          perl -pi -e "s/^class [A-Za-z0-9_-]* < Formula/class $k < Formula/" "\$f"
         done
 
         cp *.rb "$TAP_DIR/Formula/"
@@ -531,7 +531,7 @@ runs:
           {
             echo "<!DOCTYPE html><html><head><title>Index of /openbsd/$ARCH/</title></head><body><h1>Index of /openbsd/$ARCH/</h1><hr><pre>"
             for f in SHA256 SHA256.sig *.tgz; do
-              [ -f "$f" ] && printf "<a href=\"./%s\">%s</a>\n" "$f" "$f"
+              [ -f "\$f" ] && printf "<a href=\"./%s\">%s</a>\n" "\$f" "\$f"
             done
             echo "</pre><hr></body></html>"
           } >index.html
@@ -590,11 +590,11 @@ runs:
         printf '{"packages":[\n' > "$tmp"
         first=1
         find "$root/manifests" -name "*.installer.yaml" | sort | while IFS= read -r f; do
-          pkgid="$(grep '^PackageIdentifier:' "$f" | awk '{print $2}')"
-          pkgver="$(grep '^PackageVersion:' "$f"    | awk '{print $2}')"
-          itype="$(grep '^InstallerType:' "$f"       | awk '{print $2}')"
-          url="$(grep 'InstallerUrl:' "$f"            | awk '{print $2}')"
-          sha="$(grep 'InstallerSha256:' "$f"         | awk '{print $2}')"
+          pkgid="$(grep '^PackageIdentifier:' "\$f" | awk '{print $2}')"
+          pkgver="$(grep '^PackageVersion:' "\$f"    | awk '{print $2}')"
+          itype="$(grep '^InstallerType:' "\$f"       | awk '{print $2}')"
+          url="$(grep 'InstallerUrl:' "\$f"            | awk '{print $2}')"
+          sha="$(grep 'InstallerSha256:' "\$f"         | awk '{print $2}')"
           [ "$first" = "1" ] || printf ',\n' >> "$tmp"
           first=0
           printf '{"id":"%s","version":"%s","type":"%s","url":"%s","sha256":"%s"}' \
