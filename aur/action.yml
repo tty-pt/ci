@@ -10,7 +10,7 @@ inputs:
     description: 'The name of the package in the Arch User Repository (AUR).'
     required: true
   format:
-    description: 'PM Format (e.g., pacman_mingw, pacman).'
+    description: 'PM Format (pacman).'
     required: true
   repo:
     description: 'Override "format" as target folder'
@@ -38,13 +38,7 @@ runs:
       run: |
         VERSION=${GITHUB_REF_NAME#v}
         echo "VERSION=$VERSION" >> $GITHUB_ENV
-
-        # Set PREFIX based on format
-        if [ "${{ inputs.format }}" = "pacman_mingw" ]; then
-          echo "PREFIX=/mingw64" >> $GITHUB_ENV
-        else
-          echo "PREFIX=/usr" >> $GITHUB_ENV
-        fi
+        echo "PREFIX=/usr" >> $GITHUB_ENV
 
         arch="$(uname -m)"
         echo "arch=$arch" >> $GITHUB_ENV
@@ -62,7 +56,7 @@ runs:
         echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
 
     - name: Add Repo (PACMAN)
-      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
+      if: inputs.format == 'pacman'
       shell: sh
       run: |
         URL="https://${{ inputs.host }}/${{ env.REPO }}"
@@ -75,16 +69,16 @@ runs:
         EOF
         fi
 
-        pacman -Sy --noconfirm
+        pacman -Syu --noconfirm --overwrite "*"
 
     - name: Install prerequisites (PACMAN)
-      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
+      if: inputs.format == 'pacman'
       shell: sh
       run: |
         deps="${{ inputs.deps }}"
         echo "deps=$deps" > $GITHUB_ENV
 
-        pacman -Sy --noconfirm --overwrite "*" base-devel git tar gzip zstd
+        pacman -Syu --noconfirm --overwrite "*" base-devel git tar gzip zstd
         if [ -n "$deps" ]; then
           pacman -S --noconfirm --overwrite "*" $(echo "$deps" | tr ',' ' ')
         fi

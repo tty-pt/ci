@@ -355,8 +355,8 @@ runs:
           gpg --export --armor "${{ inputs.gpg_keyid }}" > "RPM-GPG-KEY-${{ env.REPO_NAME }}"
         fi
 
-    - name: Publish PACMAN / PACMAN_MINGW repo
-      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
+    - name: Publish PACMAN repo
+      if: inputs.format == 'pacman'
       shell: sh
       run: |
         cd repo

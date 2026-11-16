@@ -49,16 +49,8 @@ inputs:
     description: 'OpenBSD dependency names'
     required: false
     default: ''
-  deps_pacman_mingw:
-    description: 'Msys dependency names'
-    required: false
-    default: ''
   deps_aur:
     description: 'Arch AUR dependency names'
-    required: false
-    default: ''
-  deps_aur_mingw:
-    description: 'Arch AUR mingw dependency names'
     required: false
     default: ''
   deps_winget:
@@ -99,7 +91,7 @@ inputs:
     description: 'Private SSH key for upload'
     required: true
   node_addon:
-    description: 'Build a self-contained Node-API prebuild when npm/native/*_napi.c exists (formats rpm, brew and winget: linux-x64, darwin-arm64/x64, win32-x64) and upload it as node-prebuild-<os>-<cpu>'
+    description: 'Build a self-contained Node-API prebuild when npm/native/*_napi.c exists (formats rpm, apk, brew and winget: linux-x64, linux-x64-musl, darwin-arm64/x64, win32-x64) and upload it as node-prebuild-<os>-<cpu>'
     required: false
     default: 'true'
   node_addon_libs:
@@ -169,7 +161,7 @@ runs:
         fi
 
         # Set PREFIX based on format
-        if [ "${{ inputs.format }}" = "pacman_mingw" ] || [ "${{ inputs.format }}" = "winget" ]; then
+        if [ "${{ inputs.format }}" = "winget" ]; then
           echo "PREFIX=/mingw64" >> $GITHUB_ENV
         else
           echo "PREFIX=/usr" >> $GITHUB_ENV
@@ -207,7 +199,7 @@ runs:
       shell: sh
 
     - name: Add Repo (PACMAN)
-      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
+      if: inputs.format == 'pacman'
       shell: sh
       run: |
         URL="https://${{ inputs.host }}/${{ env.REPO }}"
@@ -220,7 +212,7 @@ runs:
         EOF
         fi
 
-        pacman -Sy --noconfirm
+        pacman -Syu --noconfirm --overwrite "*"
 
     - name: Add Repo (APT)
       if: inputs.format == 'deb'
@@ -251,13 +243,11 @@ runs:
       shell: sh
 
     - name: Install yay (PACMAN)
-      if: >
-        (inputs.format == 'pacman' && inputs.deps_aur != '') ||
-        (inputs.format == 'pacman_mingw' && inputs.deps_aur_mingw != '')
+      if: inputs.format == 'pacman' && inputs.deps_aur != ''
       shell: sh
       run: |
         if ! command -v yay >/dev/null 2>&1; then
-          pacman -Sy --noconfirm --needed --overwrite "*" git base-devel
+          pacman -S --noconfirm --needed --overwrite "*" git base-devel
           useradd -m -s /bin/bash aur || true
           echo "aur ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
@@ -269,14 +259,8 @@ runs:
           '
         fi
 
-        if [ "${{ inputs.format }}" = "pacman" ]; then
-          deps_aur="${{ inputs.deps_aur }}"
-        else
-          deps_aur="${{ inputs.deps_aur_mingw }}"
-        fi
-
         sudo -u aur yay -S --noconfirm --needed \
-          $(echo "$deps_aur" | tr ',' ' ')
+          $(echo "${{ inputs.deps_aur }}" | tr ',' ' ')
 
     - name: Install prerequisites (APK)
       if: inputs.format == 'apk'
@@ -284,7 +268,7 @@ runs:
         deps="${{ inputs.deps_apk || inputs.deps }}"
         echo "deps=$deps" > $GITHUB_ENV
 
-        apk add --no-cache doxygen
+        apk add --no-cache doxygen patchelf nodejs
         if [ -n "$deps" ]; then
           apk add --no-cache $(echo "$deps" | tr ',' ' ')
         fi
@@ -323,16 +307,12 @@ runs:
 
 
     - name: Install prerequisites (PACMAN)
-      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
+      if: inputs.format == 'pacman'
       run: |
-        if test "${{ inputs.format }}" = "pacman"; then
-          deps="${{ inputs.deps_pacman || inputs.deps }}"
-        else
-          deps="${{ inputs.deps_pacman_mingw || inputs.deps }}"
-        fi
+        deps="${{ inputs.deps_pacman || inputs.deps }}"
         echo "deps=$deps" > $GITHUB_ENV
 
-        pacman -Sy --noconfirm --overwrite "*" zip doxygen
+        pacman -S --noconfirm --needed --overwrite "*" zip doxygen
         if [ -n "$deps" ]; then
           pacman -S --noconfirm --overwrite "*" $(echo "$deps" | tr ',' ' ')
         fi
@@ -668,9 +648,6 @@ runs:
       if: inputs.format != 'brew' && inputs.format != 'openbsd' && inputs.format != 'winget'
       run: |
         export PATH="/usr/bin:/bin:$PATH"
-        test "${{ inputs.format }}" != "pacman_mingw" || export cross=Msys
-
-        find /usr/mingw64 -type f || true
         make DESTDIR=$PWD/stage
         make docs || true
         make DESTDIR=$PWD/stage install
@@ -718,6 +695,33 @@ runs:
         make DESTDIR=$PWD/stage PREFIX=/mingw64
         make docs || true
         make DESTDIR=$PWD/stage PREFIX=/mingw64 install
+
+        mkdir -p stage/mingw64/bin
+        collect_msix_deps() {
+          local target="$1"
+          local dll found
+          while IFS= read -r dll; do
+            [ -z "$dll" ] && continue
+            [ -f "stage/mingw64/bin/$dll" ] && continue
+            [ -f "stage/mingw64/lib/$dll" ] && continue
+            found=""
+            for dir in "$PWD/stage/mingw64/bin" "$PWD/stage/mingw64/lib" "/mingw64/bin"; do
+              if [ -f "$dir/$dll" ]; then
+                found="$dir/$dll"
+                break
+              fi
+            done
+            [ -z "$found" ] && continue
+            echo "  + bundling runtime DLL into stage/mingw64/bin: $dll"
+            cp -L "$found" stage/mingw64/bin/
+            collect_msix_deps "stage/mingw64/bin/$dll"
+          done < <(objdump -p "$target" 2>/dev/null | grep "DLL Name" | awk '{print $3}' | tr -d '\r')
+        }
+        for bin in stage/mingw64/bin/* stage/mingw64/lib/*.dll; do
+          [ -f "$bin" ] || continue
+          objdump -p "$bin" 2>/dev/null | grep -q "PE32" || continue
+          collect_msix_deps "$bin"
+        done
 
     - name: Create .msix and winget manifests (WINGET)
       if: inputs.format == 'winget'
@@ -970,15 +974,11 @@ runs:
         chown -R builder:builder /home/builder/.abuild
       shell: sh
 
-    - name: Generate PKGBUILD (PACMAN + PACMAN_MINGW)
-      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
+    - name: Generate PKGBUILD (PACMAN)
+      if: inputs.format == 'pacman'
       shell: sh
       run: |
-        if [ "${{ inputs.format }}" = "pacman_mingw" ]; then
-          PKG_NAME="mingw-w64-${{ inputs.name }}"
-        else
-          PKG_NAME="${{ inputs.name }}"
-        fi
+        PKG_NAME="${{ inputs.name }}"
         echo "PKG_NAME=$PKG_NAME" >> $GITHUB_ENV
         echo "ofile=$PKG_NAME-$VERSION-${{ inputs.format }}-$arch" >> $GITHUB_ENV
 
@@ -1003,8 +1003,8 @@ runs:
           echo "}"
         } > PKGBUILD
 
-    - name: Build package (PACMAN + PACMAN_MINGW)
-      if: inputs.format == 'pacman' || inputs.format == 'pacman_mingw'
+    - name: Build package (PACMAN)
+      if: inputs.format == 'pacman'
       run: |
         mkdir -p ${{ env.iden }}
         chown -R builder:builder "$PWD"
@@ -1024,111 +1024,6 @@ runs:
           fi
         done
       shell: sh
-
-    - name: Build Msys zip
-      if: inputs.format == 'pacman_mingw'
-      shell: sh
-      run: |
-        cd ${{ env.iden }}
-        mkdir extracted zip
-        tar -xaf ${{ env.ofile }}.pkg.tar.zst -C extracted
-
-        curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/scripts/rldd.sh -o rldd.sh
-        chmod +x rldd.sh
-
-        find extracted -type d -name bin
-        bin_dir=$(find extracted -type d -name bin | head -n1 || true)
-        find $bin_dir -type f
-        if [ -z "$bin_dir" ]; then
-          rm -rf extracted zip
-          echo "skip_installer=true" >> $GITHUB_ENV
-          echo SKIP
-          exit 0
-        fi
-
-        export PATH="/mingw64/bin:/mingw64/lib:$PATH"
-        export RLDD="x86_64-w64-mingw32-ldd"
-        export RLDD_PATH="/usr/x86_64-w64-mingw32/bin/:/usr/x86_64-w64-mingw32/lib:/mingw64/lib:/mingw64/bin"
-        export RLDD_SO="dll"
-        pacman -S --noconfirm --overwrite "*" mingw-w64-ldd
-
-        find $bin_dir -type f
-        has_exe=""
-        for exe in "$bin_dir"/*; do
-          if file "$exe" | grep -q "PE32"; then
-            echo "→ Collecting dependencies for $(basename "$exe")"
-            case "$exe" in
-              *.exe) has_exe=1 ;;
-            esac
-            cp -n "$exe" zip/
-
-            ./rldd.sh "$exe" | while read -r dll arrow path more; do
-              [ -z "$dll" ] && continue
-              if [ ! -f "$path" ]; then
-                echo "RLDD NOT FOUND: $dll" >&2
-                continue
-              fi
-              cp -n "$path" zip/ 2>/dev/null || true
-            done
-          fi
-        done
-
-        if test -z "$has_exe"; then
-          rm -rf extracted zip rldd.sh
-          echo "→ No executables. Skip zip and setup.exe creation"
-          echo "skip_installer=true" >> $GITHUB_ENV
-          exit 0
-        fi
-
-        find extracted/mingw64/share/ -name -f
-        if [ -d extracted/mingw64/share/${{ inputs.name}} ]; then
-          cp -r extracted/mingw64/share/${{ inputs.name }}/* zip/
-        fi
-
-        echo "📦 Creating archive..."
-        (cd zip && zip -r "../${{ env.ofile }}.zip" . >/dev/null)
-        rm -rf extracted zip rldd.sh
-        echo "✅ Done: ${{ env.ofile }}.zip"
-
-    - name: Build setup.exe with Inno Setup (headless, no GUI)
-      if: inputs.format == 'pacman_mingw' && env.skip_installer != 'true'
-      shell: bash
-      run: |
-        set -e
-
-        echo "=== 1: pacman install ==="
-        pacman -Sy --noconfirm --overwrite "*" wine xorg-server-xvfb || true
-        echo "=== 2: env setup ==="
-        export WINEARCH=win64
-        export WINEPREFIX="$PWD/wineprefix"
-        rm -rf "$WINEPREFIX"
-        mkdir -p "$WINEPREFIX"
-        export WINEDEBUG=-all
-        export WINEDLLOVERRIDES="mshtml,winemenubuilder.exe=d"
-        export XDG_RUNTIME_DIR="/tmp/runtime-$USER"
-        mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
-        echo "=== 3: wineboot ==="
-        wineboot -u; echo "=== wineboot exit: $? ==="
-        wineserver -k; echo "=== wineserver -k exit: $? ==="
-        echo "=== 4: wget innosetup ==="
-        wget -q https://github.com/jrsoftware/issrc/releases/download/is-6_7_1/innosetup-6.7.1.exe -O is.exe
-        echo "=== 5: wine is.exe ==="
-        xvfb-run -a wine is.exe /SP- /VERYSILENT /NORESTART /SUPPRESSMSGBOXES /DIR=C:\\innosetup
-        echo "=== 6: fetch installer.iss ==="
-        curl -fsSL https://raw.githubusercontent.com/tty-pt/ci/refs/heads/main/config/installer.iss -o installer.template.iss
-        sed "s/APP_NAME/${{ inputs.name }}/g" installer.template.iss > installer.iss
-        echo "=== 7: unzip ==="
-        unzip -o "${{ env.iden }}/${{ env.ofile }}.zip" -d zip
-        which wine
-        echo "=== 8: wine ISCC.exe ==="
-        xvfb-run -a wine "C:\\innosetup\\ISCC.exe" installer.iss
-        echo "=== 9: mv setup.exe ==="
-        mv Output/${{ inputs.name }}-setup.exe "${{ env.iden }}/${{ env.ofile }}-setup.exe"
-        rm -rf \
-          zip wineprefix Output is.exe \
-          installer.iss installer.template.iss \
-          rldd.sh
-        echo "✅ Created installer: ${{ env.ofile }}-setup.exe"
 
     - name: Generate APKBUILD
       if: inputs.format == 'apk'
@@ -1297,10 +1192,9 @@ runs:
         ls -l ${{ env.iden }}/
       shell: sh
 
-    - name: Sign package (PACMAN + DEB + PACMAN_MINGW)
+    - name: Sign package (PACMAN + DEB)
       if: (inputs.format == 'pacman'
-        || inputs.format == 'deb'
-        || inputs.format == 'pacman_mingw')
+        || inputs.format == 'deb')
         && inputs.gpg_key != ''
       run: |
         ext=${{ inputs.ext || inputs.format }}
@@ -1338,7 +1232,7 @@ runs:
 
     - name: Build Node addon prebuild
       id: nodeaddon
-      if: inputs.node_addon == 'true' && (inputs.format == 'rpm' || inputs.format == 'brew')
+      if: inputs.node_addon == 'true' && (inputs.format == 'rpm' || inputs.format == 'apk' || inputs.format == 'brew')
       env:
         NODE_ADDON_LIBS: ${{ inputs.node_addon_libs }}
         ACTION_PATH: ${{ github.action_path }}

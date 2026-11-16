@@ -71,7 +71,7 @@ on:
       publish_to:
         description: "Package managers to publish to"
         required: false
-        default: "deb,apk,pacman,rpm,brew,openbsd,pacman_mingw,winget"
+        default: "deb,apk,pacman,rpm,brew,openbsd,winget"
         type: string
       run_tests:
         description: "Run shared test phase before packaging"
@@ -185,10 +185,6 @@ jobs:
           - format: rpm
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/rocky-builder:latest
-          - format: pacman_mingw
-            repo: pacman
-            runner: ubuntu-latest
-            image: ghcr.io/tty-pt/mingw-builder:latest
           - format: openbsd
             runner: ubuntu-latest
           - format: brew
@@ -208,15 +204,13 @@ jobs:
           name: ${{ inputs.name }}
           format: ${{ matrix.format }}
           repo: ${{ matrix.repo }}
-          ext: ${{ (matrix.format == 'pacman' || matrix.format == 'pacman_mingw') && 'pkg.tar.*' || '' }}
+          ext: ${{ matrix.format == 'pacman' && 'pkg.tar.*' || '' }}
           deps: ${{ inputs.deps }}
           deps_deb: ${{ inputs.deps_deb || '' }}
           deps_apk: ${{ inputs.deps_apk || '' }}
           deps_pacman: ${{ inputs.deps_pacman || '' }}
           deps_aur: ${{ inputs.deps_aur || '' }}
           deps_rpm: ${{ inputs.deps_rpm || '' }}
-          deps_pacman_mingw: ${{ inputs.deps_pacman_mingw || '' }}
-          deps_aur_mingw: ${{ inputs.deps_aur_mingw || '' }}
           deps_brew: ${{ inputs.deps_brew || '' }}
           deps_openbsd: ${{ inputs.deps_openbsd || '' }}
           deps_winget: ${{ inputs.deps_winget || '' }}
@@ -252,10 +246,6 @@ jobs:
           - format: rpm
             runner: ubuntu-latest
             image: ghcr.io/tty-pt/rocky-builder:latest
-          - format: pacman_mingw
-            repo: pacman
-            runner: ubuntu-latest
-            image: ghcr.io/tty-pt/mingw-builder:latest
           - format: openbsd
             runner: ubuntu-latest
           - format: brew
@@ -305,6 +295,7 @@ jobs:
   #   npm-detect   what is there: npm/package.json, a Node addon (npm/native/*_napi.c), and which
   #                platform prebuilds the selected package formats will produce
   #   package      (above) also builds one self-contained Node addon per platform when there is one
+  #   node-arm64   builds the linux-arm64 Node addon prebuild on ubuntu-24.04-arm
   #   npm          (npm.yml) packs ONE tarball, verifies it on each platform, publishes it (tags only)
   # ---------------------------------------------------------------------------------------------
   npm-detect:
@@ -343,7 +334,8 @@ jobs:
           # Which platform prebuilds the selected package formats produce (see the package action).
           if [ "$native" = true ]; then
             has() { case ",$PUBLISH_TO," in *",$1,"*) return 0 ;; esac; return 1; }
-            if has rpm; then expect="$expect,linux-x64"; fi
+            if has rpm; then expect="$expect,linux-x64,linux-arm64"; fi
+            if has apk; then expect="$expect,linux-x64-musl"; fi
             if has brew; then expect="$expect,darwin-arm64,darwin-x64"; fi
             if has winget; then expect="$expect,win32-x64"; fi
             expect=${expect#,}
@@ -356,11 +348,86 @@ jobs:
             echo "expect=$expect"
           } >> "$GITHUB_OUTPUT"
 
+  node-arm64:
+    if: inputs.run_package && inputs.publish_npm && needs.npm-detect.outputs.native == 'true' && contains(format(',{0},', inputs.publish_to), ',rpm,')
+    needs: [test, npm-detect]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Checkout tty-pt/ci
+        uses: actions/checkout@v4
+        with:
+          repository: tty-pt/ci
+          ref: main
+          path: .ci
+
+      - name: Fetch include.mk from tty-pt/mk
+        shell: bash
+        run: |
+          [ -d "../mk" ] || git clone --depth 1 --branch main https://github.com/tty-pt/mk ../mk
+
+      - name: Build project and linux-arm64 Node addon prebuild
+        id: build_arm64
+        shell: bash
+        env:
+          DEPS_RAW: ${{ inputs.deps_deb || inputs.deps || '' }}
+        run: |
+          set -eu
+          sudo apt-get update -y
+          sudo apt-get install -y patchelf doxygen
+
+          built_repos=" "
+          install_dep() {
+            local dep="$1"
+            [ -n "$dep" ] || return 0
+            case "$built_repos" in *" $dep "*) return 0 ;; esac
+            built_repos="$built_repos$dep "
+
+            if apt-cache show "$dep" >/dev/null 2>&1; then
+              sudo apt-get install -y "$dep"
+              return 0
+            fi
+
+            local repodir="../$dep"
+            if [ ! -d "$repodir" ]; then
+              git clone --depth 1 --branch main "https://github.com/tty-pt/$dep.git" "$repodir"
+            fi
+            if [ -f "$repodir/.github/workflows/ci.yml" ]; then
+              local subdeps
+              subdeps=$(awk -F'"' '/^[[:space:]]*deps_deb:/ {print $2; exit} /^[[:space:]]*deps:/ {d=$2} END {if (d) print d}' "$repodir/.github/workflows/ci.yml")
+              for sd in $(echo "$subdeps" | tr ',' ' '); do
+                install_dep "$sd"
+              done
+            fi
+            make -C "$repodir" PREFIX=/usr
+            sudo make -C "$repodir" PREFIX=/usr install
+            sudo ldconfig
+          }
+
+          for d in $(echo "$DEPS_RAW" | tr ',' ' '); do
+            install_dep "$d"
+          done
+
+          make DESTDIR="$PWD/stage" PREFIX=/usr
+          sh .ci/scripts/build-node-addon.sh node-addon-out
+
+      - name: Upload linux-arm64 Node addon prebuild
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-prebuild-${{ steps.build_arm64.outputs.key }}
+          path: node-addon-out/*.tar.gz
+          if-no-files-found: error
+
   # The npm half (pack, verify, publish) is the reusable npm.yml, shared with npm-only repositories.
   # It runs after the OS packages are published, so npm never gets a release the other formats lack.
   npm:
-    if: always() && inputs.run_package && needs.npm-detect.outputs.npm == 'true' && needs.package.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
-    needs: [package, publish, npm-detect]
+    if: always() && inputs.run_package && needs.npm-detect.outputs.npm == 'true' && needs.package.result == 'success' && (needs.node-arm64.result == 'success' || needs.node-arm64.result == 'skipped') && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    needs: [package, publish, npm-detect, node-arm64]
     uses: tty-pt/ci/.github/workflows/npm.yml@main
     with:
       dir: ${{ needs.npm-detect.outputs.dir }}

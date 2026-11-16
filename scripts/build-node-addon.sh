@@ -167,7 +167,7 @@ esac
 # ---- bundle the non-system shared libraries --------------------------------------------------
 is_system_linux() {
 	case "$1" in
-		libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|libutil.so.*|libresolv.so.*) return 0 ;;
+		libc.so.*|libc.musl*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|libutil.so.*|libresolv.so.*) return 0 ;;
 		libnsl.so.*|libgcc_s.so.*|libstdc++.so.*|ld-linux*|ld-musl*|linux-vdso*) return 0 ;;
 		# the graphics stack comes from the driver / display server, not from the package
 		libGL.so*|libGLX.so*|libGLdispatch.so*|libOpenGL.so*|libEGL.so*|libGLESv2.so*) return 0 ;;
@@ -189,6 +189,10 @@ bundle_linux() {
 				if is_system_linux "$soname"; then continue; fi
 				[ -e "$stage/$soname" ] && continue
 				cp -L "$path" "$stage/$soname"
+				chmod u+w "$stage/$soname" 2>/dev/null || true
+				if command -v patchelf >/dev/null 2>&1; then
+					patchelf --force-rpath --set-rpath '$ORIGIN' "$stage/$soname" 2>/dev/null || true
+				fi
 				echo "   bundled $soname <- $path"
 				changed=1
 			done < "$work/deps"

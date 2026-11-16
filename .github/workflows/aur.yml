@@ -44,7 +44,7 @@ jobs:
         with:
           name: ${{ inputs.name }}
           deps: ${{ inputs.deps }}
-          format: 'pacman_mingw'
+          format: 'pacman'
           repo: 'pacman'
           host: ${{ env.HOST }}
           gpg_key: ${{ env.GPG_KEY }}
@@ -54,7 +54,7 @@ jobs:
       - name: Publish ${{ inputs.name }}
         uses: tty-pt/ci/publish@main
         with:
-          format: 'pacman_mingw'
+          format: 'pacman'
           repo: 'pacman'
           host: ${{ env.HOST }}
           user: ${{ env.USER }}
