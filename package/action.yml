@@ -504,6 +504,20 @@ runs:
         echo "✅ Uploaded ${{ inputs.name }}.tar.gz to ci-chroot staging"
         rm -rf "$UPLOAD"
 
+        ssh -F $HOME/.ssh/config ${{ inputs.host }} <<'EOF_IDX'
+        set -eu
+        ARCH=$(uname -m)
+        cd "/var/www/htdocs/openbsd/$ARCH"
+        {
+          echo "<!DOCTYPE html><html><head><title>Index of /openbsd/$ARCH/</title></head><body><h1>Index of /openbsd/$ARCH/</h1><hr><pre>"
+          for f in SHA256 SHA256.sig *.tgz; do
+            [ -f "$f" ] && printf "<a href=\"./%s\">%s</a>\n" "$f" "$f"
+          done
+          echo "</pre><hr></body></html>"
+        } >index.html
+        chmod 644 index.html
+        EOF_IDX
+
         ssh -F $HOME/.ssh/config ${{ inputs.host }} doas /usr/local/sbin/ci-chroot <<'EOF'
         set -eu
         # Refresh the holder's heartbeat so a long build is never mistaken for

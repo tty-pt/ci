@@ -526,10 +526,17 @@ runs:
             ${{ inputs.name }}-${{ env.VERSION }}.tgz
 
           echo 🧾 Generating package index...
-          rm -f index.txt
+          rm -f index.txt index.html
           ls -nlT >index.txt
+          {
+            echo "<!DOCTYPE html><html><head><title>Index of /openbsd/$ARCH/</title></head><body><h1>Index of /openbsd/$ARCH/</h1><hr><pre>"
+            for f in SHA256 SHA256.sig *.tgz; do
+              [ -f "$f" ] && printf "<a href=\"./%s\">%s</a>\n" "$f" "$f"
+            done
+            echo "</pre><hr></body></html>"
+          } >index.html
 
-          chmod 644 index.txt
+          chmod 644 index.txt index.html
           sha256 -b *.tgz > SHA256
           doas /usr/local/sbin/ci-sign-repo
 
