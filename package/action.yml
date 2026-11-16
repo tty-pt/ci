@@ -829,7 +829,7 @@ runs:
           "PackageLocale: en-US",
           "Publisher: $publisher",
           "PackageName: $name",
-          "License: MIT",
+          "License: BSD-2-Clause",
           "ShortDescription: $name binary package",
           "PackageUrl: https://github.com/$repo",
           "ManifestType: defaultLocale",
@@ -989,7 +989,7 @@ runs:
           echo "pkgdesc=\"${{ inputs.name }} binary package\""
           echo "arch=('$(uname -m)')"
           echo "url=\"https://github.com/${{ github.repository }}\""
-          echo "license=('MIT')"
+          echo "license=('BSD-2-Clause')"
 
           if [ -n "${{ env.deps }}" ]; then
             echo "depends=($(echo ${{ env.deps }} | tr ',' ' '))"
@@ -1143,7 +1143,7 @@ runs:
           echo "pkgdesc=\"${{ inputs.name }} binary package\""
           echo "url=\"https://github.com/${{ github.repository }}\""
           echo "arch=\"$(uname -m)\""
-          echo "license=\"MIT\""
+          echo "license=\"BSD-2-Clause\""
           echo "maintainer=\"$maint_host repo <repo@$maint_host>\""
           if [ -n "${{ env.deps }}" ]; then
             echo "depends=\"$(echo ${{ env.deps }} | tr ',' ' ')\""
@@ -1210,7 +1210,7 @@ runs:
         echo "Version:        ${{ env.VERSION }}"   >> $SPEC
         echo "Release:        1"          >> $SPEC
         echo "Summary:        ${{ inputs.name }} binary package" >> $SPEC
-        echo "License:        MIT"        >> $SPEC
+        echo "License:        BSD-2-Clause"        >> $SPEC
         echo "URL:            $REPO_URL"  >> $SPEC
         echo "Source0:        %{name}-%{version}.tar.gz" >> $SPEC
         echo "BuildArch: $(uname -m)"     >> $SPEC
