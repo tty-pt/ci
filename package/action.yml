@@ -202,13 +202,13 @@ runs:
       if: inputs.format == 'pacman'
       shell: sh
       run: |
-        URL="https://${{ inputs.host }}/${{ env.REPO }}"
+        URL="http://${{ inputs.host }}/${{ env.REPO }}"
         URL="$URL/x86_64/${{ env.REPO_NAME }}.db"
         if curl -sSf --http1.1 --ipv4 --connect-timeout 3 --max-time 6 -r 0-0 -o /dev/null "$URL"; then
           cat <<EOF | tee -a /etc/pacman.conf
         [${{ env.REPO_NAME }}]
         SigLevel = Never
-        Server = https://${{ inputs.host }}/${{ env.REPO }}/\$arch
+        Server = http://${{ inputs.host }}/${{ env.REPO }}/\$arch
         EOF
         fi
 
